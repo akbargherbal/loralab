@@ -241,3 +241,7 @@ def test_default_scanner_writes_the_catalog(cfg, monkeypatch):
     assert job["state"] == "done"
     assert job["result"] == {"count": 1, "errors": 0}
     assert cfg.catalog_path.is_file()
+
+
+def test_unknown_job_api_id_is_404(client):
+    assert client.get("/api/jobs/doesnotexist").status_code == 404

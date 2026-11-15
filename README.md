@@ -117,8 +117,19 @@ Data lives in `~/.local/share/loralab/` (`catalog.json`, `jobs/`, `cache/`).
 ## Tests
 
 ```bash
-python3 -m pytest -q          # 103 tests, no network, no credentials
+python3 -m pytest -q                              # 116 tests, no network, no credentials
+
+python3 -m coverage run -m pytest -q              # coverage gate
+python3 -m coverage report                        # fails non-zero below fail_under = 95
 ```
+
+**99% statement and branch coverage** (805 statements, 4 missed; 6 partial branches).
+The floor is enforced twice: `[tool.coverage.report] fail_under = 95` in `pyproject.toml`,
+and `.github/workflows/tests.yml` runs the gate on every push.
+
+The four uncovered statements are: the two-line `python -m loralab` shim (exercised by a
+subprocess test, not measurable in-process), and the `except OSError` in `jobs.log_text`
+(the `is_file()` check above it makes the branch unreachable without patching `open`).
 
 Synthetic safetensors are built byte-for-byte in the tests and go through the same
 header parser the GCS path uses. Transport is exercised with a fake HTTP layer

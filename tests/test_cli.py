@@ -193,3 +193,43 @@ def test_ctrl_c_is_exit_130(isolated, monkeypatch, capsys):
     monkeypatch.setattr(cat, "scan",
                         lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt()))
     assert cli.main(["scan", "--bucket", "bkt"]) == 130
+
+
+def test_doctor_reports_a_bucket_failure(isolated, monkeypatch, capsys):
+    monkeypatch.setattr(gcs, "list_objects",
+                        lambda *a, **k: (_ for _ in ()).throw(gcs.GcsError("HTTP 403 denied")))
+    assert cli.main(["doctor", "--bucket", "bkt"]) == 1
+    assert "FAIL" in capsys.readouterr().out
+
+
+def test_doctor_reports_catalog_age_when_one_exists(isolated, monkeypatch, capsys,
+                                                    entry_factory):
+    cat.save_catalog(isolated / "data" / "loralab" / "catalog.json", {
+        "count": 1, "scope": "gs://b/ROOT", "generated_utc": "2026-11-15T00:00:00Z",
+        "entries": [entry_factory("a/b/c.safetensors")], "errors": []})
+    monkeypatch.setattr(gcs, "list_objects", lambda *a, **k: [])
+    assert cli.main(["doctor", "--bucket", "bkt"]) == 0
+    out = capsys.readouterr().out
+    assert "1 adapter(s)" in out and "2026-11-15" in out
+
+
+# ---------------------------------------------------------------------------
+# entry points, as the user actually invokes them
+# ---------------------------------------------------------------------------
+def _run_module(module: str):
+    import subprocess
+    import sys
+    return subprocess.run([sys.executable, "-m", module, "--version"],
+                          capture_output=True, text=True, timeout=120)
+
+
+def test_python_m_loralab_works():
+    result = _run_module("loralab")
+    assert result.returncode == 0
+    assert "loralab" in result.stdout
+
+
+def test_cli_module_also_runs_as_a_script():
+    result = _run_module("loralab.cli")
+    assert result.returncode == 0
+    assert "loralab" in result.stdout

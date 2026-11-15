@@ -91,3 +91,28 @@ def test_cancelling_a_finished_job_is_a_no_op(cfg):
     job = jobs.submit("scan", {}, lambda ctx: {})
     wait_for(jobs, job["id"])
     assert jobs.cancel(job["id"]) is False
+
+
+def test_unreadable_log_is_not_fatal(cfg):
+    jobs = Jobs(cfg.jobs_dir)
+    weird = jobs.root / "weird"
+    weird.mkdir()
+    (weird / "log.txt").mkdir()      # a directory where a file is expected
+    assert jobs.log_text("weird") == ("", 0)
+
+
+def test_cancelling_a_job_that_is_still_queued(cfg):
+    """Deterministic: a cancel that lands before the worker picks the job up."""
+    gate = threading.Event()
+
+    def occupies_the_worker(ctx):
+        gate.wait(5)
+        return {}
+
+    jobs = Jobs(cfg.jobs_dir)
+    first = jobs.submit("scan", {}, occupies_the_worker)
+    second = jobs.submit("scan", {}, lambda ctx: {"ran": True})
+    assert jobs.cancel(second["id"])          # queued, not started
+    gate.set()
+    assert wait_for(jobs, first["id"])["state"] == "done"
+    assert wait_for(jobs, second["id"])["state"] == "cancelled"

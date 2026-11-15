@@ -14,7 +14,7 @@ dependencies = ["flask>=3.0"]
 # Needed only for the service-account / ADC rungs of the auth ladder.
 # Without it the app falls back to `gcloud auth print-access-token`.
 gcs = ["google-auth>=2.0", "requests>=2.25"]
-dev = ["pytest>=7.0"]
+dev = ["pytest>=7.0", "coverage>=7.0"]
 
 [project.scripts]
 loralab = "loralab.cli:main"
@@ -27,3 +27,17 @@ include = ["loralab*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# `coverage report` exits non-zero below the floor. Run it as:
+#   python3 -m coverage run -m pytest -q && python3 -m coverage report
+[tool.coverage.run]
+branch = true
+source = ["loralab"]
+
+[tool.coverage.report]
+fail_under = 95
+show_missing = true
+skip_covered = true
+exclude_also = [
+    "if __name__ == .__main__.:",
+]

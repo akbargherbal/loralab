@@ -12,7 +12,7 @@ at runtime.
 
 
 > **Status (2026-11-15):** P1 is built and shipped — `loralab serve` shows the catalog,
-> adapter detail, provenance, lineage, jobs and a doctor page. 103 tests, no network, no
+> adapter detail, provenance, lineage, jobs and a doctor page. 116 tests, no network, no
 > credentials. P2 (mix) is next and carries the conformance gate described in §8.
 > This file is the design record; keep it in sync with the code or delete it.
 

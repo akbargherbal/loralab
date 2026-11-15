@@ -215,3 +215,70 @@ def test_401_twice_is_a_gcs_error_not_a_loop(monkeypatch):
     with pytest.raises(gcs.GcsError, match="401"):
         gcs.read_range("b", "o", 0, 3, gcs.Token("test", fetch=fetch))
     assert len(calls) == 2
+
+
+# ---------------------------------------------------------------------------
+# the google-auth rung (fake modules, no library, no network)
+# ---------------------------------------------------------------------------
+def _install_fake_google(monkeypatch, *, token="g-token", raises=None):
+    import sys
+    import types
+
+    calls = {}
+
+    class Creds:
+        def __init__(self):
+            self.token = token
+
+        def refresh(self, request):
+            calls["refreshed"] = True
+            if raises:
+                raise raises
+
+    class Request:  # noqa: D401 — stands in for google.auth.transport.requests.Request
+        pass
+
+    google = types.ModuleType("google")
+    auth = types.ModuleType("google.auth")
+    auth.default = lambda scopes=None: (Creds(), "proj")
+    transport = types.ModuleType("google.auth.transport")
+    requests = types.ModuleType("google.auth.transport.requests")
+    requests.Request = Request
+    google.auth, auth.transport, transport.requests = auth, transport, requests
+
+    for name, module in (("google", google), ("google.auth", auth),
+                         ("google.auth.transport", transport),
+                         ("google.auth.transport.requests", requests)):
+        monkeypatch.setitem(sys.modules, name, module)
+    return calls
+
+
+def test_google_token_refreshes_and_returns_the_token(monkeypatch):
+    calls = _install_fake_google(monkeypatch)
+    assert gcs.google_token() == ("g-token", gcs.TOKEN_TTL)
+    assert calls["refreshed"] is True
+
+
+def test_google_token_is_none_when_refresh_fails(monkeypatch):
+    _install_fake_google(monkeypatch, raises=RuntimeError("metadata 404"))
+    assert gcs.google_token() is None
+
+
+def test_google_token_is_none_when_credentials_have_no_token(monkeypatch):
+    _install_fake_google(monkeypatch, token="")
+    assert gcs.google_token() is None
+
+
+# ---------------------------------------------------------------------------
+# defensive token states
+# ---------------------------------------------------------------------------
+def test_an_expired_token_without_a_refresher_says_so():
+    token = gcs.Token("test")
+    with pytest.raises(gcs.GcsError, match="no refresher"):
+        token.get()
+
+
+def test_a_refresher_that_returns_nothing_says_so():
+    token = gcs.Token("test", fetch=lambda: ("", 0))
+    with pytest.raises(gcs.GcsError, match="returned no token"):
+        token.get()

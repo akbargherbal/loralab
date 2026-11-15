@@ -105,3 +105,9 @@ def test_derived_paths_hang_off_the_data_dir(tmp_path):
     assert cfg.catalog_path == tmp_path / "catalog.json"
     assert cfg.jobs_dir == tmp_path / "jobs"
     assert cfg.cache_dir == tmp_path / "cache"
+
+
+def test_a_str_data_dir_from_a_caller_is_coerced(tmp_path):
+    cfg = load_config(config_path=tmp_path / "a.toml", environ={},
+                      cli={"data_dir": str(tmp_path / "cli")})
+    assert cfg.data_dir == tmp_path / "cli"

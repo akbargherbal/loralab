@@ -11,14 +11,17 @@ Authorities that **stay** in this repo even though the code won't: `docs/PRON_LO
 at runtime.
 
 
-> **Status (2026-11-15):** P1 is built and shipped — `loralab serve` shows the catalog,
-> adapter detail, provenance, lineage, jobs and a doctor page. P2 (mix) is built too:
+> **Status (2026-11-15):** P1–P4 are built and shipped. `loralab serve` shows the
+> catalog, adapter detail, provenance, lineage, jobs, doctor, settings and cache panel.
 > `loralab mix` and the Mix page stage inputs, build a rank-concatenation grid, convert
-> with the pinned tool, and write `MANIFEST.json`. The published-artifact conformance
-> gate in §8 has not yet been run against the real GCS pair (it needs the artifacts);
-> the arithmetic is pinned by unit tests, including the α=0 identity and padding.
-> P3 (upload) is next. This file is the design record; keep it in sync with the code or
-> delete it.
+> with the pinned tool, and write `MANIFEST.json`. `loralab upload` and the upload page
+> preview every destination object, default to `_prototypes/mixes/`, block production
+> `loras/` without an explicit flag, and require an explicit overwrite for existing keys.
+> The §8 conformance gate **passes against the real published pair**: rebuilding
+> `v3 × arabic_instrumental` at α 0.1/0.2 reproduced all four converted AR/NAR sha256s
+> byte-for-byte. The real upload path was smoke-tested on a `_prototypes/` prefix and
+> the test objects were removed externally afterwards. This file is the design record;
+> keep it in sync with the code or delete it.
 
 ---
 
@@ -76,9 +79,11 @@ and by the Settings page.
 bucket  = "akbar-december-2024-backup"
 root    = "OSTRIS_Arabic_Suno_Finetuning"     # prefix inside the bucket; "" is valid
 prefixes = ["loras/", "v3_arabmaqamrock_lora/", "arabic_instrumental_lora/", "quran_ahh_r32/"]
-converter = { object = "audiocpp_inference/converter/convert_aitoolkit_yue2_lora.py",
-              sha256 = "<pinned>" }
+converter_object = "audiocpp_inference/converter/convert_aitoolkit_yue2_lora.py"
+converter_sha256 = "<pinned>"                  # empty = trust on first use
 upload_prefix = "_prototypes/mixes/"           # default destination; never loras/
+host = "127.0.0.1"
+port = 5000
 ```
 
 ## 2. What the app owns
@@ -110,9 +115,10 @@ multiplier, so `α = 30` is not "30 %": reject anything outside `[0, 1]` loudly.
 ```
 loralab/
   __init__.py  config.py  gcs.py  catalog.py  merge.py  convert.py  manifests.py
+  mixjob.py  upload.py  conformance.py
   jobs.py            # on-disk job state, single FIFO worker, startup reconcile
   web/app.py  web/templates/  web/static/
-  cli.py             # loralab serve | doctor | scan | mix | upload
+  cli.py             # loralab serve | doctor | scan | mix | upload | conformance
 pyproject.toml       # console script: loralab
 tests/
 ```
@@ -143,8 +149,9 @@ Server-rendered Jinja + ~150 lines of vanilla JS for polling. No build step.
 | `GET /api/jobs/<id>?log_offset=N` | poll | 1 s while running, stop on terminal |
 | `POST /jobs/<id>/cancel` | cancel | flag file; render-free, so cancel is always safe |
 | `GET /mix/<id>/manifest.json` | download | the manifest, exactly as uploaded |
-| `POST /mix/<id>/upload` | upload | dry-run preview first: destination object names + sizes; refuses `loras/` unless `--allow-production-prefix` |
-| `GET /settings` | settings | bucket/root/prefixes, upload prefix, converter pin, auth probe |
+| `GET /mix/<id>/upload` | upload preview | exact destination object names + sizes, existing-key markers, guards; writes nothing |
+| `POST /mix/<id>/upload` | upload | re-runs the preview server-side, requires the confirmation tick, then queues a job; refuses `loras/` unless allowed |
+| `GET /settings` | settings | bucket/root/prefixes, upload prefix, converter pin, cache inventory, auth probe |
 
 Naming: `<carrier>__<donor>__a<α>` by default, overridable. The converter writes
 `<stem>_ar.safetensors` / `<stem>_nar.safetensors`; since the stem is not
@@ -205,10 +212,10 @@ The previous attempt spent a whole session and shipped no UI. Order is chosen ag
 
 | phase | deliverable | done when |
 |---|---|---|
-| **P1** | `loralab serve` — app shell + catalog + adapter detail, reading a configured bucket | you open `127.0.0.1:5000` in a browser and see the real adapter table; no page can write |
-| **P2** | mix: form → job → verify → convert → manifest → result card | **built**; the §8 conformance gate still needs the published artifacts |
-| **P3** | upload with dry-run preview + prefix guard | upload is off by default; the destination is named before it happens |
-| **P4** | polish: cache panel, settings page, `doctor`, keyboard/URL state | a repeat build on cached sources is < 3 s wall |
+| **P1** | `loralab serve` — app shell + catalog + adapter detail, reading a configured bucket | **built** — open `127.0.0.1:5000` and the real adapter table renders; no page can write |
+| **P2** | mix: form → job → verify → convert → manifest → result card | **built and gated** — §8 conformance passes on both published α arms |
+| **P3** | upload with dry-run preview + prefix guard | **built** — off by default; exact destination names/sizes precede any write; `loras/` and existing keys are blocked |
+| **P4** | polish: cache panel, settings page, `doctor`, keyboard/URL state | **built** — settings write atomically and apply live; cache inventory; `g c/m/j/d/s` shortcuts |
 
 P1 is deliberately a UI phase, not a library phase. The catalog logic it needs is ~330 lines and
 is written **inside** P1.
@@ -233,6 +240,22 @@ is written **inside** P1.
   when the fused file keeps the arm's basename and the converter stem matches (a different
   basename changes only the embedded `source_file`). Otherwise compare the tensor set, ranks and
   the δ-sum — never the fused file's sha.
+
+  **Run 2026-11-15 (real GCS inputs, local CPU):**
+
+  ```bash
+  loralab mix --carrier v3_arabmaqamrock_lora.safetensors \
+              --donor arabic_instrumental_lora.safetensors \
+              --alpha 0.1 --alpha 0.2 --stem v3instr \
+              --converter convert_aitoolkit_yue2_lora.py
+  loralab conformance --manifest <out>/MANIFEST.json
+  # conformance: PASS — converted AR/NAR match the published pair
+  ```
+
+  Measured δ at α 0.1/0.2 was `4.2e-06` / `8.3e-06`; the converter reported its own
+  byte-level check `OK`; all four converted files matched the published sha256 and
+  size exactly. `loralab conformance` embeds those reference hashes and accepts both
+  this app's list-of-arms manifest and the published dict-of-arms shape.
 * A negative test: the app must fail the gate when α round-trips through `float32` sloppily or
   when the donor is scaled into `A` instead of `B` (the two most plausible re-implementation bugs).
 
@@ -258,5 +281,6 @@ is written **inside** P1.
 2. **Default bucket prefix** — prefill this project's bucket, or ship empty and make Settings
    mandatory on first run? (Prefill is friendlier; empty is more portable.)
 3. **α grid vs one-at-a-time** in P2 — grids are cheap (0.5 s/arm) but ~280 MB/arm.
-4. **Naming** — `<carrier>__<donor>__a<α>`, or keep the shipped `v3instr_a0.2` style? It is the
-   string you will type into every later songs JSON.
+4. **Naming** — resolved: the default is `<carrier>__<donor>__a<α>`, and an explicit
+   `--stem v3instr` produces `<stem>_a<α>` so upstream names (`v3instr_a0.1`) can be
+   reproduced byte-for-byte. Upload directories use the explicit stem when present.

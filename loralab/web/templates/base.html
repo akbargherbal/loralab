@@ -28,6 +28,7 @@
       <a href="{{ url_for('mix_new') }}"{% if ep in ('mix_new', 'mix_submit') %} aria-current="page"{% endif %}>Mix</a>
       <a href="{{ url_for('jobs_view') }}"{% if ep in ('jobs_view', 'job_view') %} aria-current="page"{% endif %}>Jobs</a>
       <a href="{{ url_for('doctor') }}"{% if ep == 'doctor' %} aria-current="page"{% endif %}>Doctor</a>
+      <a href="{{ url_for('settings') }}"{% if ep == 'settings' %} aria-current="page"{% endif %}>Settings</a>
     </nav>
     <span class="spacer"></span>
     <span class="scope" title="bucket/root in use">{{ cfg.display_scope() }}</span>
@@ -72,13 +73,29 @@
     } else { fallback(); }
   });
 
-  // "/" focuses the catalog search box.
+  // "/" focuses the catalog search box; "g c/m/j/d/s" jumps between views.
+  var pendingG = false, gTimer = null;
   document.addEventListener('keydown', function (e) {
-    if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
     var t = e.target, tag = t.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable) return;
-    var s = document.querySelector('input[type=search]');
-    if (s) { e.preventDefault(); s.focus(); s.select(); }
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === '/') {
+      var s = document.querySelector('input[type=search]');
+      if (s) { e.preventDefault(); s.focus(); s.select(); }
+      return;
+    }
+    if (e.key === 'g') {
+      pendingG = true;
+      clearTimeout(gTimer);
+      gTimer = setTimeout(function () { pendingG = false; }, 900);
+      return;
+    }
+    if (pendingG) {
+      var go = { c: '/catalog', m: '/mix/new', j: '/jobs', d: '/doctor', s: '/settings' }[e.key];
+      pendingG = false;
+      clearTimeout(gTimer);
+      if (go) { e.preventDefault(); location.href = go; }
+    }
   });
 })();
 </script>

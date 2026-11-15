@@ -63,6 +63,41 @@ state in the URL.
   α > 0 shows the measured `max |δ|`. Paths and sha256s follow. The fused file's sha is
   labelled run-only; the converted AR/NAR pair is the identity.
 
+## The upload screen
+
+Upload is the only surface that writes to a bucket, so it is deliberately the least
+casual screen in the app:
+
+* **Preview is a GET, upload is a POST.** The preview resolves the destination once and
+  lists every object name, size and sha256 before any bytes move. The form fields stay in
+  the URL, so a preview can be reopened or shared without re-typing the destination.
+* **The guard is visible, not implied.** A second panel states whether the destination is
+  the `_prototypes/` default or production `loras/`, whether overwrite is on, and that no
+  delete path exists. A `loras/` destination renders as a blocker, not a warning.
+* **Confirmation is a second, explicit act.** The submit button is disabled while there
+  are blockers, and the POST also requires a ticked checkbox. The server re-runs the whole
+  plan (guards, existing keys, sizes) rather than trusting hidden fields.
+* **The manifest goes last.** Objects are ordered converted → fused → sidecar → manifest,
+  so a reader never sees a manifest for a half-written directory. Existing keys are
+  `status bad` rows; overwrite pins the generation the preview saw.
+* **The record is a normal job.** Upload runs through the same on-disk queue and log as a
+  scan or mix, and the job page shows the destination, every object and the verification
+  result. The source mix page gets one `Upload to GCS →` link.
+
+## Settings and the cache panel
+
+Settings is a plain form over `~/.config/loralab/config.toml`, not a new source of truth:
+
+* Saving validates first, writes atomically, then reloads the config and swaps the app's
+  closure cell. Catalog/auth changes apply on the next scan; host/port need a restart,
+  which the page says above the form.
+* `LORALAB_*` environment variables are listed above the form because they still win.
+  The page does not pretend to override them.
+* The cache panel is read-only inventory: what is actually under `cache/src` and
+  `cache/tools`, newest first, plus free disk. Nothing there is required for a
+  catalog-only run, and deleting a source only costs a re-download, so there is no
+  destructive button.
+
 ## Tokens
 
 Defined at the top of `app.css`; light and dark follow `prefers-color-scheme`.
@@ -94,7 +129,8 @@ These add convenience without changing what any page does or which routes exist:
 
 * Kind counts at the top of the catalog are links that apply the existing `?kind=`
   filter (and keep the current search and prefix). Click the active one to clear it.
-* `/` focuses the catalog search box.
+* `/` focuses the catalog search box; `g c/m/j/d/s` jumps to catalog, mix, jobs,
+  doctor or settings.
 * Copy buttons on paths, hashes, the terminal command and the record JSON.
 * The job log follows new output, unless you have scrolled up to read.
 * Active tab in the header, a skip-to-content link, visible keyboard focus, and

@@ -10,6 +10,7 @@ or `bucket = "..."` in `~/.config/loralab/config.toml`.
 """
 from __future__ import annotations
 
+import json
 import os
 import tomllib
 from dataclasses import dataclass, field, replace
@@ -160,6 +161,84 @@ def load_config(*, config_path: Path | None = None, cli: dict | None = None,
     if isinstance(cfg.data_dir, str):
         cfg = replace(cfg, data_dir=Path(cfg.data_dir).expanduser())
     return cfg
+
+
+def config_values(cfg: "Config") -> dict:
+    """The effective config as plain TOML values (what Settings saves)."""
+    return {
+        "bucket": cfg.bucket,
+        "root": cfg.root,
+        "prefixes": list(cfg.prefixes),
+        "converter_object": cfg.converter_object,
+        "converter_sha256": cfg.converter_sha256,
+        "upload_prefix": cfg.upload_prefix,
+        "host": cfg.host,
+        "port": int(cfg.port),
+        "data_dir": str(cfg.data_dir),
+    }
+
+
+def validate_values(values: dict) -> dict:
+    """Validate and normalise values before they reach a config file."""
+    out = dict(values)
+    for key in ("bucket", "root", "converter_object", "upload_prefix", "host"):
+        out[key] = str(out.get(key, "") or "").strip()
+    out["root"] = out["root"].strip("/")
+    out["upload_prefix"] = out["upload_prefix"].strip("/")
+    if not out["upload_prefix"]:
+        raise ConfigError("upload_prefix cannot be empty")
+    if any(part in ("", ".", "..") for part in out["upload_prefix"].split("/")):
+        raise ConfigError("upload_prefix must be a relative path with no '..'")
+    prefixes = out.get("prefixes") or []
+    if isinstance(prefixes, str):
+        prefixes = prefixes.replace(",", "\n").splitlines()
+    cleaned = []
+    for prefix in prefixes:
+        prefix = str(prefix).strip().lstrip("/")
+        if not prefix:
+            continue
+        if any(part in ("", ".", "..") for part in prefix.rstrip("/").split("/")):
+            raise ConfigError(f"invalid prefix {prefix!r}")
+        cleaned.append(prefix)
+    if not cleaned:
+        raise ConfigError("prefixes cannot be empty; list at least one catalog prefix")
+    out["prefixes"] = cleaned
+    try:
+        port = int(out.get("port", 5000))
+    except (TypeError, ValueError):
+        raise ConfigError("port must be a number") from None
+    if not (1 <= port <= 65535):
+        raise ConfigError("port must be between 1 and 65535")
+    out["port"] = port
+    out["data_dir"] = str(Path(out.get("data_dir") or default_data_dir()).expanduser())
+    return out
+
+
+def write_config(path: Path, values: dict) -> Path:
+    """Write every known setting to `path`, atomically. Used by `loralab init`
+    and the Settings page. Environment variables still win at load time."""
+    path = Path(path).expanduser()
+    values = validate_values(values)
+    prefixes = ",\n  ".join(json.dumps(p) for p in values["prefixes"])
+    lines = [
+        "# loralab configuration",
+        "# Written by `loralab init` or the Settings page; LORALAB_* overrides this file.",
+        f"bucket = {json.dumps(values['bucket'])}",
+        f"root = {json.dumps(values['root'])}",
+        f"prefixes = [\n  {prefixes},\n]",
+        f"converter_object = {json.dumps(values['converter_object'])}",
+        f"converter_sha256 = {json.dumps(values['converter_sha256'])}",
+        f"upload_prefix = {json.dumps(values['upload_prefix'])}",
+        f"host = {json.dumps(values['host'])}",
+        f"port = {values['port']}",
+        f"data_dir = {json.dumps(values['data_dir'])}",
+        "",
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text("\n".join(lines))
+    tmp.replace(path)
+    return path
 
 
 def write_default_config(path: Path, *, bucket: str = "") -> Path:

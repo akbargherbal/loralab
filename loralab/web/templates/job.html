@@ -19,6 +19,11 @@
 
 {% if job.kind == 'mix' and manifest %}
 <h2>Result</h2>
+{% if job.state == 'done' %}
+<div class="head-actions upload-actions">
+  <a class="button" href="{{ url_for('upload_preview', job_id=job.id) }}">Upload to GCS →</a>
+</div>
+{% endif %}
 {% for arm in manifest.arms %}
 <section class="panel arm">
   <h3>α {{ arm.alpha }}
@@ -64,6 +69,34 @@
 </div>
 {% endif %}
 
+{% if upload_record %}
+<h2>Upload</h2>
+<div class="panel">
+  <dl class="kv">
+    <dt>destination</dt><dd class="mono small">{{ upload_record.display }}</dd>
+    <dt>objects</dt><dd class="mono">{{ upload_record.count }} · {{ '%.1f'|format(upload_record.total_bytes / 1e6) }} MB</dd>
+    <dt>overwrite</dt><dd class="mono">{{ 'yes' if upload_record.overwrite else 'no — created only' }}</dd>
+    <dt>record</dt>
+    <dd class="mono small">upload.json</dd>
+  </dl>
+  <ul class="rows upload-list">
+    {% for item in upload_record.objects %}
+    <li>
+      <span class="mono small">{{ item.object }}</span>
+      <span class="dim small">{{ '%.1f'|format(item.size_bytes / 1e6) }} MB
+        {% if item.md5_verified %}· md5 verified{% endif %}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  <p class="dim small">There is no delete path in the app; removing an object is a
+    deliberate console/gsutil action.</p>
+</div>
+{% endif %}
+
+{% if job.kind == 'upload' and job.params.get('job') %}
+<p class="back"><a href="{{ url_for('job_view', job_id=job.params['job']) }}">← source mix {{ job.params['job'] }}</a></p>
+{% endif %}
+
 {% if snippet %}
 <h2>Use it</h2>
 <div class="panel">
@@ -80,7 +113,7 @@
 {% set ns = namespace(parts=['loralab', job.kind]) %}
 {% for k, v in job.params.items() %}
   {% if k != 'scope' %}
-    {% set flag = {'prefixes': 'prefix'}.get(k, k) %}
+    {% set flag = {'prefixes': 'prefix'}.get(k, k)|replace('_', '-') %}
     {% if v is sameas true %}
       {% set _ = ns.parts.append('--' ~ flag) %}
     {% elif v is sameas false %}

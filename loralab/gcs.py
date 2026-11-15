@@ -34,7 +34,15 @@ TOKEN_TTL = 3000  # seconds; nominal, refreshed on expiry or on a 401
 
 
 class GcsError(RuntimeError):
-    """Storage/auth problem with an actionable message."""
+    """Storage/auth problem with an actionable message.
+
+    `status` is the HTTP status when there was one, so callers can distinguish
+    "not found" from "not allowed" without parsing the message.
+    """
+
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
 
 
 class Token:
@@ -130,18 +138,32 @@ def _open(url: str, token: Token, headers: dict | None = None):
             try:
                 return attempt(True)
             except urllib.error.HTTPError as again:
-                raise GcsError(_explain(again, url)) from again
-        raise GcsError(_explain(exc, url)) from exc
+                raise GcsError(_explain(again, url), again.code) from again
+        raise GcsError(_explain(exc, url), exc.code) from exc
 
 
-def _explain(exc: urllib.error.HTTPError, url: str) -> str:
+def _explain(exc: urllib.error.HTTPError, url: str,
+             action: str = "list/get") -> str:
     where = urllib.parse.urlsplit(url).path.split("/")[-1] or url
+    detail = ""
+    try:
+        body = exc.read()
+        if body:
+            detail = (json.loads(body).get("error") or {}).get("message") or ""
+    except Exception:
+        detail = ""
+    suffix = f" — {detail}" if detail else ""
     if exc.code == 403:
-        return (f"{where}: HTTP 403 — the credentials lack storage.objects.list/get "
-                f"on this prefix")
+        return (f"{where}: HTTP 403 — the credentials lack storage.objects.{action} "
+                f"on this prefix{suffix}")
     if exc.code == 404:
-        return (f"{where}: HTTP 404 — object or bucket not found (check bucket/root)")
-    return f"{where}: HTTP {exc.code} {exc.reason}"
+        return (f"{where}: HTTP 404 — object or bucket not found (check bucket/root)"
+                + suffix)
+    if exc.code == 412:
+        return (f"{where}: HTTP 412 — the object already exists (or changed while "
+                f"uploading); pass the overwrite flag to replace it deliberately"
+                + suffix)
+    return f"{where}: HTTP {exc.code} {exc.reason}{suffix}"
 
 
 def list_objects(bucket: str, prefix: str, suffix: str = ".safetensors",
@@ -175,12 +197,25 @@ def read_range(bucket: str, obj: str, start: int, end: int,
         return resp.read()
 
 
-def stat_object(bucket: str, obj: str, token: Token) -> dict:
+def stat_object(bucket: str, obj: str, token: Token,
+                fields: str | None = None) -> dict:
     url = (f"{API}/storage/v1/b/{urllib.parse.quote(bucket, safe='')}/o/"
            f"{urllib.parse.quote(obj, safe='')}")
+    if fields:
+        url += "?" + urllib.parse.urlencode({"fields": fields})
     resp = _open(url, token)
     with resp:
         return json.load(resp)
+
+
+def stat_or_none(bucket: str, obj: str, token: Token) -> dict | None:
+    """Stat one object, treating 404 as "does not exist" and nothing else as absent."""
+    try:
+        return stat_object(bucket, obj, token)
+    except GcsError as exc:
+        if exc.status == 404:
+            return None
+        raise
 
 
 def download_object(bucket: str, obj: str, dest, token: Token | None = None,
@@ -215,3 +250,111 @@ def download_object(bucket: str, obj: str, dest, token: Token | None = None,
                 log(f"  {dest.name}: {total / 1e6:.0f} MB")
     tmp.replace(dest)
     return {"path": str(dest), "size": total, "sha256": digest.hexdigest()}
+
+
+def upload_object(bucket: str, obj: str, source, token: Token | None = None, *,
+                  overwrite: bool = False, generation: str | None = None,
+                  log=None) -> dict:
+    """Create one object from a local file, with a create-only precondition.
+
+    The default is **create-only** (`ifGenerationMatch=0`): an existing key is a
+    `412`, never a silent replacement. `overwrite=True` still pins the generation
+    seen by the preview, so a file that changed between preview and upload fails
+    instead of replacing the wrong bytes. No prompt can turn this into a delete:
+    the app never sends a DELETE, and the recommended IAM role has no delete
+    permission.
+    """
+    import base64
+    import hashlib
+
+    token = token or resolve_token()
+    source = Path(source)
+    if not source.is_file():
+        raise GcsError(f"cannot upload {source}: file not found")
+    size = source.stat().st_size
+    sha = hashlib.sha256()
+    md5 = hashlib.md5()
+    with open(source, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            sha.update(block)
+            md5.update(block)
+    sha256 = sha.hexdigest()
+    md5_b64 = base64.b64encode(md5.digest()).decode()
+    sha_b64 = base64.b64encode(bytes.fromhex(sha256)).decode()
+
+    params = {"uploadType": "media", "name": obj}
+    # Create-only unless an overwrite was explicitly requested *and* the preview
+    # saw the object. If it did not exist then, keep create-only so a race cannot
+    # turn into an accidental replacement.
+    params["ifGenerationMatch"] = generation if (overwrite and generation) else "0"
+    url = (f"{API}/upload/storage/v1/b/{urllib.parse.quote(bucket, safe='')}/o?"
+           + urllib.parse.urlencode(params))
+
+    def attempt(force: bool):
+        headers = {
+            "Authorization": f"Bearer {token.get(force=force)}",
+            "Content-Type": "application/octet-stream",
+            "Content-Length": str(size),
+            "X-Goog-Hash": f"sha256={sha_b64}",
+        }
+        # A fresh handle per attempt: a 401 retry must not reuse a consumed body.
+        handle = open(source, "rb")
+        req = urllib.request.Request(url, data=handle, headers=headers,
+                                     method="POST")
+        try:
+            resp = urllib.request.urlopen(req, timeout=600)
+        except Exception:
+            handle.close()
+            raise
+        # urlopen has finished sending the body by the time it returns.
+        handle.close()
+        return resp
+
+    if log:
+        log(f"upload: {obj} ({size / 1e6:.1f} MB)")
+    try:
+        resp = attempt(False)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:
+            try:
+                resp = attempt(True)
+            except urllib.error.HTTPError as again:
+                raise GcsError(_explain(again, url, "create"), again.code) from again
+        else:
+            raise GcsError(_explain(exc, url, "create"), exc.code) from exc
+    with resp:
+        try:
+            meta = json.load(resp)
+        except ValueError:
+            meta = {}
+
+    # Read back the object the service actually stored. GCS keeps md5/crc32c,
+    # not sha256, so size + md5 are the server-side checks; sha256 stays the
+    # local identity recorded in the manifest.
+    stored = stat_object(
+        bucket, obj, token,
+        fields="name,size,generation,md5Hash,crc32c,updated",
+    )
+    if int(stored.get("size", -1)) != size:
+        raise GcsError(
+            f"{obj}: uploaded {size} bytes but the bucket reports "
+            f"{stored.get('size')} — the upload did not land intact"
+        )
+    server_md5 = stored.get("md5Hash")
+    md5_verified = False
+    if server_md5:
+        if server_md5 != md5_b64:
+            raise GcsError(
+                f"{obj}: bucket md5 does not match the local file; refusing "
+                "to call this upload complete"
+            )
+        md5_verified = True
+    return {
+        "name": obj,
+        "size": size,
+        "sha256": sha256,
+        "md5_verified": md5_verified,
+        "generation": stored.get("generation") or meta.get("generation"),
+        "crc32c": stored.get("crc32c"),
+        "updated": stored.get("updated"),
+    }

@@ -341,3 +341,205 @@ def test_download_object_surfaces_a_storage_error(tmp_path, monkeypatch):
     monkeypatch.setattr(gcs, "_open", deny)
     with pytest.raises(gcs.GcsError, match="403"):
         gcs.download_object("b", "obj", tmp_path / "x", token=_token())
+
+
+# ---------------------------------------------------------------------------
+# upload
+# ---------------------------------------------------------------------------
+class UploadResp:
+    def __init__(self, body: bytes):
+        self._body = body
+        self.headers = {"Content-Length": str(len(body))}
+
+    def read(self, *_a):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_a):
+        return False
+
+
+def _sha_b64(path):
+    import base64
+    import hashlib
+    return base64.b64encode(hashlib.sha256(path.read_bytes()).digest()).decode()
+
+
+def _md5_b64(path):
+    import base64
+    import hashlib
+    return base64.b64encode(hashlib.md5(path.read_bytes()).digest()).decode()
+
+
+@pytest.fixture
+def upload_http(monkeypatch):
+    """A fake JSON API: POST records the body, GET serves the stat response."""
+    state = {"posts": [], "stat": None, "post_status": None}
+
+    def fake_urlopen(req, timeout=None):
+        if req.get_method() == "POST":
+            body = req.data.read() if hasattr(req.data, "read") else req.data
+            state["posts"].append({"url": req.full_url, "body": body,
+                                   "headers": dict(req.headers)})
+            if state["post_status"]:
+                raise urllib.error.HTTPError(req.full_url, state["post_status"],
+                                             "no", {}, None)
+            return UploadResp(b'{"generation": "42"}')
+        return UploadResp(json.dumps(state["stat"]).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    return state
+
+
+def test_upload_object_creates_with_a_generation_zero_precondition(
+        tmp_path, upload_http):
+    path = tmp_path / "a.safetensors"
+    path.write_bytes(b"payload")
+    upload_http["stat"] = {"size": "7", "generation": "42",
+                           "md5Hash": _md5_b64(path), "crc32c": "AAAAAA==",
+                           "updated": "2026-11-15T00:00:00Z"}
+    result = gcs.upload_object("b", "ROOT/a.safetensors", path, token=_token())
+    assert result["size"] == 7 and result["md5_verified"] is True
+    assert result["generation"] == "42"
+    post = upload_http["posts"][0]
+    query = parse_qs(urlparse(post["url"]).query)
+    assert query["uploadType"] == ["media"]
+    assert query["name"] == ["ROOT/a.safetensors"]
+    assert query["ifGenerationMatch"] == ["0"]
+    assert post["body"] == b"payload"
+    assert post["headers"].get("X-goog-hash") == f"sha256={_sha_b64(path)}"
+
+
+def test_upload_object_overwrite_pins_the_previewed_generation(
+        tmp_path, upload_http):
+    path = tmp_path / "a"
+    path.write_bytes(b"payload")
+    upload_http["stat"] = {"size": "7", "md5Hash": _md5_b64(path)}
+    gcs.upload_object("b", "o", path, token=_token(), overwrite=True,
+                      generation="17")
+    query = parse_qs(urlparse(upload_http["posts"][0]["url"]).query)
+    assert query["ifGenerationMatch"] == ["17"]
+
+
+def test_upload_object_overwrite_without_a_seen_generation_stays_create_only(
+        tmp_path, upload_http):
+    path = tmp_path / "a"
+    path.write_bytes(b"x")
+    upload_http["stat"] = {"size": "1"}
+    gcs.upload_object("b", "o", path, token=_token(), overwrite=True)
+    query = parse_qs(urlparse(upload_http["posts"][0]["url"]).query)
+    assert query["ifGenerationMatch"] == ["0"]
+
+
+def test_upload_object_verifies_the_stored_size(tmp_path, upload_http):
+    path = tmp_path / "a"
+    path.write_bytes(b"payload")
+    upload_http["stat"] = {"size": "6"}
+    with pytest.raises(gcs.GcsError, match="did not land intact"):
+        gcs.upload_object("b", "o", path, token=_token())
+
+
+def test_upload_object_rejects_a_different_server_hash(tmp_path, upload_http):
+    path = tmp_path / "a"
+    path.write_bytes(b"payload")
+    upload_http["stat"] = {"size": "7", "md5Hash": "not-it"}
+    with pytest.raises(gcs.GcsError, match="md5 does not match"):
+        gcs.upload_object("b", "o", path, token=_token())
+
+
+def test_upload_object_412_explains_overwrite(tmp_path, upload_http):
+    path = tmp_path / "a"
+    path.write_bytes(b"x")
+    upload_http["post_status"] = 412
+    with pytest.raises(gcs.GcsError, match="overwrite") as err:
+        gcs.upload_object("b", "o", path, token=_token())
+    assert err.value.status == 412
+
+
+def test_upload_object_needs_a_local_file(tmp_path):
+    with pytest.raises(gcs.GcsError, match="file not found"):
+        gcs.upload_object("b", "o", tmp_path / "missing", token=_token())
+
+
+def test_stat_or_none_treats_only_404_as_absent(monkeypatch):
+    def absent(*_a, **_k):
+        raise gcs.GcsError("404", 404)
+
+    monkeypatch.setattr(gcs, "stat_object", absent)
+    assert gcs.stat_or_none("b", "o", _token()) is None
+
+    def denied(*_a, **_k):
+        raise gcs.GcsError("403", 403)
+
+    monkeypatch.setattr(gcs, "stat_object", denied)
+    with pytest.raises(gcs.GcsError, match="403"):
+        gcs.stat_or_none("b", "o", _token())
+
+
+def test_upload_401_refreshes_and_retries_with_a_fresh_handle(tmp_path,
+                                                             monkeypatch):
+    import io
+    path = tmp_path / "a"
+    path.write_bytes(b"payload")
+    calls = {"post": 0}
+
+    def fake_urlopen(req, timeout=None):
+        if req.get_method() == "POST":
+            calls["post"] += 1
+            if calls["post"] == 1:
+                raise urllib.error.HTTPError(req.full_url, 401, "expired",
+                                             {}, io.BytesIO(b"{}"))
+            assert req.data.read() == b"payload"
+            return UploadResp(b'{"generation": "5"}')
+        return UploadResp(json.dumps({"size": "7", "md5Hash": _md5_b64(path)}).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    fetches = []
+
+    def fetch():
+        fetches.append(1)
+        return ("tok", 3000)
+
+    result = gcs.upload_object("b", "o", path, token=_token(fetch))
+    assert calls["post"] == 2
+    assert len(fetches) == 2
+    assert result["generation"] == "5" and result["md5_verified"] is True
+
+
+def test_upload_tolerates_an_empty_post_body(tmp_path, monkeypatch):
+    path = tmp_path / "a"
+    path.write_bytes(b"x")
+
+    def fake_urlopen(req, timeout=None):
+        if req.get_method() == "POST":
+            return UploadResp(b"")
+        return UploadResp(json.dumps({"size": "1"}).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    result = gcs.upload_object("b", "o", path, token=_token())
+    assert result["size"] == 1 and result["md5_verified"] is False
+
+
+def test_upload_logs_the_object_and_size(tmp_path, upload_http):
+    path = tmp_path / "a"
+    path.write_bytes(b"1234")
+    upload_http["stat"] = {"size": "4", "md5Hash": _md5_b64(path)}
+    lines = []
+    gcs.upload_object("b", "o", path, token=_token(), log=lines.append)
+    assert lines and "o (0.0 MB)" in lines[0]
+
+
+def test_error_message_includes_the_service_detail(monkeypatch):
+    import io
+
+    def bad(req, timeout=None):
+        raise urllib.error.HTTPError(
+            req.full_url, 400, "Bad Request", {},
+            io.BytesIO(b'{"error": {"message": "Invalid field selection"}}'))
+
+    monkeypatch.setattr(urllib.request, "urlopen", bad)
+    with pytest.raises(gcs.GcsError, match="Invalid field selection") as err:
+        gcs.stat_object("b", "o", _token())
+    assert err.value.status == 400

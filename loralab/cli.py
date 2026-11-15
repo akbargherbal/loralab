@@ -7,8 +7,8 @@ import shutil
 import sys
 from pathlib import Path
 
-from . import __version__, catalog as cat, convert as convertmod, gcs
-from . import manifests, merge, mixjob
+from . import __version__, catalog as cat, conformance, convert as convertmod, gcs
+from . import manifests, merge, mixjob, upload as uploadmod
 from .config import Config, ConfigError, load_config, write_default_config
 from .jobs import Jobs
 
@@ -200,6 +200,76 @@ def cmd_mix(args) -> int:
     return 0
 
 
+def cmd_upload(args) -> int:
+    cfg = _cfg(args)
+    cfg.require_bucket()
+    if bool(args.job) == bool(args.dir):
+        print("ERROR: give exactly one of --job <id> or --dir <mix directory>",
+              file=sys.stderr)
+        return 2
+    if args.job:
+        manifest_path = Path(cfg.jobs_dir) / args.job / "MANIFEST.json"
+        job_id = args.job
+    else:
+        manifest_path = Path(args.dir).expanduser() / "MANIFEST.json"
+        job_id = None
+    doc = manifests.read(manifest_path)
+    if not doc:
+        print(f"ERROR: no readable manifest at {manifest_path}", file=sys.stderr)
+        return 2
+
+    token = gcs.resolve_token()
+    print(f"auth: {token.mode} · {cfg.display_scope()}")
+    plan = uploadmod.plan_uploads(
+        cfg, manifest_path, doc,
+        prefix=args.prefix, name=args.name,
+        include_fused=args.include_fused, overwrite=args.overwrite,
+        allow_production_prefix=args.allow_production_prefix,
+        token=token, job_id=job_id,
+    )
+    print(uploadmod.describe(plan))
+    if args.dry_run:
+        return 2 if plan["blockers"] else 0
+    if plan["blockers"]:
+        return 2
+    if not args.yes:
+        if not sys.stdin.isatty():
+            print("ERROR: refusing to write without confirmation; re-run with --yes "
+                  "(or use --dry-run first)", file=sys.stderr)
+            return 2
+        answer = input(f"Upload {plan['count']} object(s), {plan['total_mb']} MB "
+                       f"to {plan['display']}? [y/N] ")
+        if answer.strip().lower() not in ("y", "yes"):
+            print("aborted")
+            return 1
+    record = uploadmod.apply_plan(
+        cfg, plan, token=token, overwrite=args.overwrite,
+        log=print, record_path=manifest_path.parent / "upload.json",
+    )
+    print(f"\nuploaded {record['count']} object(s), "
+          f"{record['total_bytes'] / 1e6:.1f} MB")
+    print(f"destination: {plan['display']}")
+    print(f"record:      {manifest_path.parent / 'upload.json'}")
+    return 0
+
+
+def cmd_conformance(args) -> int:
+    cfg = _cfg(args)
+    path = Path(args.manifest).expanduser() if args.manifest else None
+    if path is None:
+        candidates = sorted(Path(cfg.jobs_dir).glob("*/MANIFEST.json"),
+                            key=lambda p: p.stat().st_mtime, reverse=True)
+        if not candidates:
+            print("ERROR: no job manifest found; pass --manifest PATH", file=sys.stderr)
+            return 2
+        path = candidates[0]
+    report = conformance.check_file(path)
+    print(conformance.format_report(report))
+    if args.json:
+        print(json.dumps(report, indent=2))
+    return 0 if report["passed"] else 1
+
+
 def _default_config() -> Path:
     from .config import default_config_path
     return default_config_path()
@@ -264,6 +334,34 @@ def build_parser() -> argparse.ArgumentParser:
                    help="show ranks, sizes and the command; do not read weights")
     m.set_defaults(func=cmd_mix)
 
+    u = sub.add_parser("upload", help="upload a finished mix (preview first)")
+    add_common(u)
+    u.add_argument("--job", default=None, help="source mix job id under <data-dir>/jobs/")
+    u.add_argument("--dir", default=None, help="a mix directory containing MANIFEST.json")
+    u.add_argument("--prefix", default=None,
+                   help="bucket-relative destination prefix (default: config upload_prefix)")
+    u.add_argument("--name", default=None,
+                   help="destination directory (default: carrier__donor)")
+    u.add_argument("--include-fused", action=argparse.BooleanOptionalAction,
+                   default=False, help="also upload the non-reproducible fused file")
+    u.add_argument("--overwrite", action="store_true",
+                   help="replace existing keys (the preview names each one)")
+    u.add_argument("--allow-production-prefix", action="store_true",
+                   help="permit a destination under loras/ (not recommended)")
+    u.add_argument("--yes", action="store_true",
+                   help="do not prompt; required when stdin is not a terminal")
+    u.add_argument("--dry-run", action="store_true",
+                   help="show object names, sizes and blockers; write nothing")
+    u.set_defaults(func=cmd_upload)
+
+    c = sub.add_parser("conformance",
+                       help="compare a rebuilt mix with the published v3 pair")
+    add_common(c)
+    c.add_argument("--manifest", default=None,
+                   help="MANIFEST.json to check (default: newest job manifest)")
+    c.add_argument("--json", action="store_true")
+    c.set_defaults(func=cmd_conformance)
+
     i = sub.add_parser("init", help="write a config file with working defaults")
     i.add_argument("--config", type=Path, default=None)
     i.add_argument("--bucket", default=None)
@@ -281,7 +379,7 @@ def main(argv=None) -> int:
     except gcs.GcsError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
-    except (merge.MergeError, convertmod.ConvertError) as exc:
+    except (merge.MergeError, convertmod.ConvertError, uploadmod.UploadError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:

@@ -383,8 +383,12 @@ def run(ctx, cfg, params: dict, *, token=None, converter_path=None) -> dict:
         arm_dir = out_root / tag
         # At alpha=0 the fused file keeps the carrier's basename: that is what
         # makes the converted pair byte-identical to a converted carrier.
+        # An explicit --stem is the arm prefix (`v3instr_a0.1`), so it can
+        # reproduce an upstream name exactly. The default keeps the plan's
+        # `<carrier>__<donor>__a<alpha>` shape.
+        separator = "_" if params.get("stem") else "__"
         fused_name = (carrier["name"] if alpha == 0.0
-                      else f"{stem_base}__{tag}.safetensors")
+                      else f"{stem_base}{separator}{tag}.safetensors")
         fused_path = arm_dir / fused_name
         ctx.log(f"arm {tag}: merging {donor['name']} into {carrier['name']}")
         result = merge.merge_files(

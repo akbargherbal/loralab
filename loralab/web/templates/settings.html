@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}Settings · loralab{% endblock %}
+{% block body %}
+<div class="head">
+  <div>
+    <h1>Settings</h1>
+    <p class="sub">Written to <span class="mono">{{ cfg.config_path }}</span>.
+      Environment variables (<span class="mono">LORALAB_*</span>) still win.</p>
+  </div>
+  <div class="head-actions">
+    <a class="button" href="{{ url_for('doctor') }}">Doctor</a>
+  </div>
+</div>
+
+{% if saved %}<p class="status ok savedline">Saved. Catalog and auth changes take effect on the next scan; host/port need a restart.</p>{% endif %}
+{% if error %}<div class="alert" role="alert"><strong>Not saved</strong> {{ error }}</div>{% endif %}
+
+<form class="mix-form" method="post" action="{{ url_for('save_settings') }}">
+  <div class="form-grid">
+    <label class="field">
+      <span>bucket <span class="dim">the one required setting</span></span>
+      <input type="text" name="bucket" value="{{ values.bucket }}" spellcheck="false"
+             autocomplete="off" placeholder="my-bucket">
+    </label>
+    <label class="field">
+      <span>root <span class="dim">prefix inside the bucket; empty is valid</span></span>
+      <input type="text" name="root" value="{{ values.root }}" spellcheck="false"
+             autocomplete="off">
+    </label>
+    <label class="field field-wide">
+      <span>catalog prefixes <span class="dim">one per line, bucket-relative</span></span>
+      <textarea name="prefixes" rows="5" spellcheck="false">{{ values.prefixes|join('\n') }}</textarea>
+    </label>
+    <label class="field">
+      <span>upload prefix <span class="dim">default destination; never loras/</span></span>
+      <input type="text" name="upload_prefix" value="{{ values.upload_prefix }}"
+             spellcheck="false" autocomplete="off">
+    </label>
+    <label class="field">
+      <span>converter object <span class="dim">downloaded once and pinned</span></span>
+      <input type="text" name="converter_object" value="{{ values.converter_object }}"
+             spellcheck="false" autocomplete="off">
+    </label>
+    <label class="field">
+      <span>converter sha256 <span class="dim">empty = trust on first use</span></span>
+      <input type="text" name="converter_sha256" value="{{ values.converter_sha256 }}"
+             spellcheck="false" autocomplete="off">
+    </label>
+    <label class="field">
+      <span>host <span class="dim">127.0.0.1 unless you mean it</span></span>
+      <input type="text" name="host" value="{{ values.host }}" spellcheck="false"
+             autocomplete="off">
+    </label>
+    <label class="field">
+      <span>port</span>
+      <input type="text" name="port" value="{{ values.port }}" inputmode="numeric"
+             autocomplete="off">
+    </label>
+    <label class="field">
+      <span>data dir <span class="dim">catalog, jobs and cache; restart to change</span></span>
+      <input type="text" value="{{ values.data_dir }}" readonly>
+    </label>
+  </div>
+  <div class="form-actions">
+    <button class="primary" type="submit">Save settings</button>
+    <span class="dim small">auth: {{ auth_mode }}{% if auth_error %} — {{ auth_error }}{% endif %}</span>
+  </div>
+</form>
+
+{% if env_overrides %}
+<p class="notes"><strong>Environment overrides present:</strong>
+  {% for name in env_overrides %}<span class="chip mono">{{ name }}</span>{% endfor %}
+  — these win over the file until unset.</p>
+{% endif %}
+
+<h2>Cache</h2>
+<p class="section-lead">Sources are keyed by crc32c; the converter is pinned once.
+  Nothing here is required for a catalog-only run, and deleting a source only costs
+  a re-download.</p>
+<div class="facts">
+  <div class="panel">
+    <h3>Totals</h3>
+    <dl class="kv">
+      <dt>cache</dt><dd class="mono small">{{ cfg.cache_dir }}</dd>
+      <dt>used</dt><dd class="mono">{{ '%.1f'|format(cache.total_bytes / 1e6) }} MB</dd>
+      <dt>free disk</dt><dd class="mono">{{ '%.1f'|format(cache.free_bytes / 1e9) }} GB</dd>
+    </dl>
+  </div>
+  {% for group in cache.dirs %}
+  <div class="panel">
+    <h3>{{ group.name }} <span class="dim">{{ group.count }} file(s) · {{ '%.1f'|format(group.bytes / 1e6) }} MB</span></h3>
+    {% if group.files %}
+    <ul class="rows cache-list">
+      {% for item in group.files %}
+      <li><span class="mono small">{{ item.name }}</span><span class="dim small">{{ '%.1f'|format(item.size_bytes / 1e6) }} MB</span></li>
+      {% endfor %}
+    </ul>
+    {% if group.count > group.files|length %}<p class="dim small">… {{ group.count - group.files|length }} more</p>{% endif %}
+    {% else %}<p class="dim small">empty</p>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<p class="back"><a href="{{ url_for('catalog_view') }}">← back to catalog</a></p>
+{% endblock %}

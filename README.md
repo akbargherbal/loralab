@@ -3,7 +3,7 @@
 A local, single-user workbench for **YuE2 LoRA adapters** backed by a Google Cloud
 Storage bucket.
 
-It does two things, and deliberately nothing else:
+It does three things, and deliberately nothing else:
 
 1. **Catalog** — reads every adapter's *safetensors header only* (the 8-byte length
    prefix plus the JSON that follows) over an HTTP `Range` request. A 133 MB file
@@ -12,12 +12,16 @@ It does two things, and deliberately nothing else:
 2. **Mix** — carrier + donor at an alpha, merged by rank concatenation, converted to
    the audio.cpp `_ar`/`_nar` pair, with a manifest. The merge keeps the LoRA in
    low-rank form; the dense weight delta is never materialised.
+3. **Upload** — a finished mix to GCS, after an exact preview of every object name and
+   size. The default destination is `_prototypes/mixes/`; production `loras/` needs an
+   explicit flag, existing keys need an explicit overwrite, and there is no delete path.
 
 No training. No audio rendering. No GPU.
 
-> Status: **P1 (catalog) and P2 (mix) ship.** Browse, search, filter and inspect
-> provenance and lineage; then build `carrier × donor` grids from the browser or
-> `loralab mix`. Upload to GCS is still P3 — mixes stay local.
+> Status: **P1–P4 ship.** Browse, search, filter and inspect provenance and lineage;
+> build `carrier × donor` grids from the browser or `loralab mix`; preview and upload a
+> mix with guards; edit settings and inventory the cache. The PLAN §8 conformance gate
+> passes against the real published pair (both arms, all four converted sha256s).
 
 ## Install
 
@@ -61,7 +65,7 @@ metadata credentials on a non-GCP box and then fail, which would otherwise look 
 "the app is broken". The winning rung is shown in the header and in `loralab doctor`.
 
 Permissions needed: `storage.objects.list` + `storage.objects.get` on the prefix;
-`storage.objects.create` only for uploads (P3). **Do not grant delete** — grant
+`storage.objects.create` only for uploads. **Do not grant delete** — grant
 `roles/storage.objectViewer` plus a custom role containing only `objects.create`, and the
 app cannot remove an adapter even if a bug says it should.
 
@@ -74,6 +78,10 @@ loralab catalog [--json]        # print the cached catalog, no network
 loralab mix     --carrier C --donor D --alpha A [--alpha A ...] [--out DIR]
                 [--stem NAME] [--convert | --no-convert] [--converter PATH]
                 [--dry-run]
+loralab upload  (--job ID | --dir DIR) [--prefix P] [--name N]
+                [--include-fused | --no-include-fused] [--overwrite]
+                [--allow-production-prefix] [--dry-run] [--yes]
+loralab conformance [--manifest PATH] [--json]
 loralab doctor                  # what it thinks it has; paste this in a bug report
 loralab init    [--bucket B]    # write ~/.config/loralab/config.toml
 ```
@@ -150,13 +158,51 @@ whole-file sha256 is not (safetensors writes `__metadata__` in nondeterministic 
 so the UI labels it "this run only". Ranks add: two rank-32 adapters make a rank-64
 fused file (~235 MB) and a converted pair (~280 MB).
 
+## Uploading
+
+Upload is a separate, explicit click after a mix finishes. The preview names every
+destination object first; `--dry-run` stops there and writes nothing.
+
+```bash
+loralab upload --dir <mix-dir> --bucket my-bucket --dry-run
+loralab upload --job <mix-job-id> --dry-run
+loralab upload --job <mix-job-id> --yes
+```
+
+* **Destination.** `<upload_prefix>/<carrier>__<donor>` by default. With an explicit
+  `--stem v3instr`, the directory is `v3instr` (arm files are `v3instr_a0.1_ar…`).
+  `--prefix` and `--name` override the two parts.
+* **Contents.** The converted AR/NAR pair and each arm's JSON sidecar, then
+  `MANIFEST.json` **last**, so a reader never sees a manifest for a half-written
+  directory. `--include-fused` adds the fused file, whose whole-file sha is run-only.
+* **Production guard.** Any destination with a `loras` path segment is refused unless
+  `--allow-production-prefix` is explicit. The default stays in `_prototypes/mixes/`.
+* **Existing keys.** A create-only precondition (`ifGenerationMatch=0`) makes an
+  existing key an HTTP 412. `--overwrite` is required to replace one, and it pins the
+  generation the preview saw, so an object that changed in between fails instead of
+  being replaced silently.
+* **No delete.** The app never sends a DELETE, and the recommended IAM grant has no
+  delete permission. Removing an object is a deliberate console/`gsutil` action.
+* **Read-back.** After each object the service's `size` and `md5Hash` are checked
+  (GCS stores md5/crc32c, not sha256); the local sha256 remains the identity recorded
+  in the manifest. The upload record is `upload.json` next to the source manifest (or
+  in the upload job directory).
+
+In the browser, a finished mix gets an `Upload to GCS →` link. The page is a GET
+preview with the same object table, guards and terminal command; the actual POST also
+requires a confirmation checkbox and re-runs every check server-side.
+
 ## Safety
 
 * Binds `127.0.0.1` by default. `--host 0.0.0.0` prints a warning: the app can write to a
-  bucket (P3 uploads) and a mix reads and writes local files. Prefer a tunnel.
+  bucket and a mix reads and writes local files. Prefer a tunnel.
 * No auth on the app itself; single user, by design.
-* Mixing writes only to the data dir (`mixes/`, job dirs, `cache/`). Nothing in the UI
-  writes to GCS; upload is a later, explicit phase.
+* Catalog and mix write only to the data dir (`catalog.json`, job dirs, `mixes/`,
+  `cache/`). Upload is the only bucket write, and it requires a preview plus an explicit
+  confirmation.
+* Uploads default to `_prototypes/mixes/`. A destination under `loras/` is blocked unless
+  `--allow-production-prefix` is explicit; existing keys are blocked unless `--overwrite`
+  is explicit; there is no delete path and no delete permission is requested.
 * Jobs live on disk (`<data-dir>/jobs/<id>/`). Kill the server any time; a job left
   `running` becomes `failed — engine restarted` on the next start rather than a zombie.
 
@@ -165,15 +211,17 @@ fused file (~235 MB) and a converted pair (~280 MB).
 ```
 loralab/
   config.py     # defaults, precedence, ~/.config + ~/.local/share
-  gcs.py        # auth ladder, listing, Range reads, streamed downloads
+  gcs.py        # auth ladder, listing, Range reads, streamed downloads, create-only upload
   catalog.py    # header parse → classify → lineage → catalog.json
   merge.py      # rank-concat math, alpha convention, verification
   convert.py    # run the pinned converter (cache + TOFU sha256 pin)
   manifests.py  # MANIFEST.json + per-arm sidecars
   mixjob.py     # staging → merge each α → convert → manifest (CLI + web)
+  upload.py     # destination guards, preview, create-only upload, upload.json
+  conformance.py# rebuild vs the published converted pair (PLAN §8 gate)
   jobs.py       # on-disk job state, one FIFO worker, cooperative cancel
   web/          # Flask app, Jinja templates, one CSS file, bundled fonts (see DESIGN.md)
-  cli.py        # serve | scan | catalog | mix | doctor | init
+  cli.py        # serve | scan | catalog | mix | upload | conformance | doctor | init
 ```
 
 Data lives in `~/.local/share/loralab/` (`catalog.json`, `jobs/`, `mixes/`, `cache/`).
@@ -181,30 +229,40 @@ Data lives in `~/.local/share/loralab/` (`catalog.json`, `jobs/`, `mixes/`, `cac
 ## Tests
 
 ```bash
-python3 -m pytest -q                              # 267 tests, no network, no credentials
+python3 -m pytest -q                              # 378 tests, no network, no credentials
 python3 -m coverage run -m pytest -q              # coverage gate
 python3 -m coverage report                        # fails non-zero below fail_under = 95
 ```
 
-**99% statement and branch coverage** (1636 statements, 11 missed). The floor is
+**98% statement and branch coverage** (2203 statements, 31 missed). The floor is
 enforced twice: `[tool.coverage.report] fail_under = 95` in `pyproject.toml`, and
 `.github/workflows/tests.yml` runs the gate on every push. CI installs the merge extra
 from the CPU torch index; tests that need torch skip if it is absent, but the gate
 expects it.
 
-The uncovered lines are the `python -m loralab` shim (exercised by a subprocess test,
-not measurable in-process), an `except OSError` in `jobs.log_text` whose `is_file()`
-guard makes it unreachable without patching `open`, and two defensive branches in the
-converter's timeout loop.
+The uncovered lines are mostly defensive: the `python -m loralab` shim (exercised by a
+subprocess test, not measurable in-process), `except OSError` paths whose `is_file()`
+guard makes them hard to reach, and a few branch-only edges in the upload planner.
 
 Synthetic safetensors are built byte-for-byte in the tests and go through the same
 header parser the GCS path uses. The merge tests use real tiny tensors (rank 4) and
 assert the arithmetic, the α = 0 identity, padding, and the measured δ; a fake converter
 writes the `_ar`/`_nar` pair so the pipeline is exercised without the real tool.
 Transport is exercised with a fake HTTP layer (in-memory ranges, paginated listings,
-401 refresh, streaming downloads). The web layer is driven through Flask's test client,
-including the mixer's 409 gates, artifact allow-list, job state machine and restart
-reconcile.
+401 refresh, streaming downloads, create-only uploads, 412/400 bodies). The web layer is
+driven through Flask's test client, including mixer 409 gates, upload preview/confirm
+gates, settings validation, artifact allow-lists, job state machine and restart
+reconcile. `tests/test_conformance.py` pins all four published converted sha256s, both
+manifest shapes, and the float32-alpha negative case.
+
+The real §8 gate is a one-time check, not a CI test (it needs the two 117 MB inputs):
+
+```bash
+loralab mix --carrier ...v3_arabmaqamrock_lora.safetensors \
+            --donor ...arabic_instrumental_lora.safetensors \
+            --alpha 0.1 --alpha 0.2 --stem v3instr --converter .../convert_aitoolkit_yue2_lora.py
+loralab conformance --manifest <out>/MANIFEST.json
+```
 
 ## Provenance
 
@@ -213,10 +271,10 @@ into the up-projection), the alpha=0 identity invariant, and the converter's sin
 constraint are documented in the upstream project
 (`maqamrock-yue2-lora-finetuning`): `docs/PRON_LORA_MERGE.md`, `docs/LORA_LAB.md`. This
 package re-implements them so it can stand alone; `tests/test_merge.py` pins the
-arithmetic, the α=0 identity and the padding rule. The published-artifact conformance
-gate in `PLAN.md` §8 (rebuild `v3 × arabic_instrumental` and compare the converted
-AR/NAR sha256) needs the real GCS artifacts and is a one-time manual check, not a CI
-test: stage the two inputs, run `loralab mix`, and compare the pair's sha256 with the
-published manifest.
+arithmetic, the α=0 identity and the padding rule. The published-artifact gate in
+`PLAN.md` §8 was run on 2026-11-15 against the real GCS pair: rebuilding
+`v3 × arabic_instrumental` at α 0.1 and 0.2 reproduced all four published converted
+sha256s exactly (`loralab conformance` now encodes the expected values). The embedded
+reference hashes and both manifest shapes are also pinned by `tests/test_conformance.py`.
 
 Code MIT. Adapter weights are not distributed here.

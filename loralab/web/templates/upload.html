@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% from "_macros.html" import copy %}
+{% block title %}Upload {{ job.id }} · loralab{% endblock %}
+{% block body %}
+<div class="head">
+  <div>
+    <h1>Upload mix</h1>
+    <p class="sub">The destination is named before anything is written. Existing
+      keys need an explicit overwrite; the app has no delete path.</p>
+  </div>
+  <div class="head-actions">
+    <a class="button" href="{{ url_for('job_view', job_id=job.id) }}">← job {{ job.id }}</a>
+  </div>
+</div>
+
+{% if errors %}
+<div class="alert" role="alert">
+  <strong>Cannot upload yet</strong>
+  <ul>{% for error in errors %}<li>{{ error }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<form class="mix-form" method="get" action="{{ url_for('upload_preview', job_id=job.id) }}">
+  <div class="form-grid">
+    <label class="field">
+      <span>destination prefix <span class="dim">bucket-relative; the configured root is added</span></span>
+      <input type="text" name="prefix" value="{{ prefix }}" spellcheck="false"
+             autocomplete="off">
+    </label>
+    <label class="field">
+      <span>directory <span class="dim">default: carrier__donor</span></span>
+      <input type="text" name="name" value="{{ name }}" spellcheck="false"
+             autocomplete="off" placeholder="v3instr">
+    </label>
+    <label class="field">
+      <span>contents</span>
+      <span class="checkline"><input type="checkbox" name="include_fused" value="1"{% if include_fused %} checked{% endif %}>
+        also upload the fused file (its whole-file sha is this run only)</span>
+    </label>
+    <label class="field">
+      <span>existing keys</span>
+      <span class="checkline"><input type="checkbox" name="overwrite" value="1"{% if overwrite %} checked{% endif %}>
+        overwrite them deliberately</span>
+    </label>
+    <label class="field">
+      <span>production guard</span>
+      <span class="checkline"><input type="checkbox" name="allow_production_prefix" value="1"{% if allow_production_prefix %} checked{% endif %}>
+        allow a destination under <span class="mono">loras/</span></span>
+    </label>
+  </div>
+  <div class="form-actions">
+    <button type="submit">Preview</button>
+  </div>
+</form>
+
+{% if plan %}
+<h2>Preview</h2>
+<div class="facts">
+  <div class="panel">
+    <h3>Destination</h3>
+    <dl class="kv">
+      <dt>bucket</dt><dd class="mono small">{{ plan.display }}</dd>
+      <dt>directory</dt><dd class="mono small">{{ plan.directory }}</dd>
+      <dt>objects</dt><dd class="mono">{{ plan.count }}</dd>
+      <dt>size</dt><dd class="mono">{{ plan.total_mb }} MB</dd>
+      {% if plan.existing %}<dt>existing</dt><dd class="mono">{{ plan.existing }}</dd>{% endif %}
+    </dl>
+  </div>
+  <div class="panel">
+    <h3>Guard</h3>
+    <dl class="kv">
+      <dt>production</dt>
+      <dd>{% if plan.production %}<span class="status bad">under loras/</span>{% else %}<span class="status ok">_prototypes default</span>{% endif %}</dd>
+      <dt>overwrite</dt><dd class="mono">{{ 'yes' if plan.overwrite else 'no — create only' }}</dd>
+      <dt>delete</dt><dd class="dim small">no delete path exists</dd>
+    </dl>
+  </div>
+</div>
+
+{% if plan.blockers %}
+<div class="alert" role="alert">
+  <strong>Blocked</strong>
+  <ul>{% for blocker in plan.blockers %}<li>{{ blocker }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+{% if plan.warnings %}
+<ul class="notes">{% for warning in plan.warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
+{% endif %}
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th></th><th>object</th><th class="num">MB</th><th>sha256</th></tr></thead>
+  <tbody>
+  {% for item in plan.objects %}
+    <tr>
+      <td>{% if item.exists %}<span class="status bad" title="exists; overwrite required">exists</span>{% else %}<span class="status ok">new</span>{% endif %}</td>
+      <td class="mono small">{{ item.object }}</td>
+      <td class="num">{{ '%.1f'|format(item.size_bytes / 1048576) }}</td>
+      <td class="mono small">{{ item.sha256[:16] }}…</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<p class="section-lead">The equivalent terminal command:</p>
+{% set cmdline = plan.command|join(' ') ~ ' --dry-run' %}
+<div class="cmd-wrap">
+  <pre class="cmd">{{ cmdline }}</pre>
+  {{ copy(cmdline, "command") }}
+</div>
+
+<form method="post" action="{{ url_for('upload_submit', job_id=job.id) }}">
+  <input type="hidden" name="prefix" value="{{ plan.prefix }}">
+  <input type="hidden" name="name" value="{{ plan.directory }}">
+  {% if include_fused %}<input type="hidden" name="include_fused" value="1">{% endif %}
+  {% if overwrite %}<input type="hidden" name="overwrite" value="1">{% endif %}
+  {% if allow_production_prefix %}<input type="hidden" name="allow_production_prefix" value="1">{% endif %}
+  <label class="checkline confirmline">
+    <input type="checkbox" name="confirm" value="1">
+    I reviewed these {{ plan.count }} object name(s). Upload {{ plan.total_mb }} MB.
+  </label>
+  <div class="form-actions">
+    <button class="primary" type="submit"{% if plan.blockers or errors %} disabled{% endif %}>Upload</button>
+  </div>
+</form>
+{% endif %}
+
+<p class="back"><a href="{{ url_for('job_view', job_id=job.id) }}">← back to the mix</a></p>
+{% endblock %}

@@ -341,3 +341,133 @@ def test_mix_dry_run_refuses_a_converted_input(isolated, weights_factory, tmp_pa
                      "--alpha", "0.2", "--dry-run"])
     assert code == 2
     assert "only fused or merged" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# upload + conformance
+# ---------------------------------------------------------------------------
+def _mix_dir(tmp_path):
+    from loralab import manifests, upload
+    root = tmp_path / "mixdir"
+    arm_dir = root / "a0.1"
+    arm_dir.mkdir(parents=True)
+    ar = arm_dir / "c__d__a0.1_ar.safetensors"
+    nar = arm_dir / "c__d__a0.1_nar.safetensors"
+    ar.write_bytes(b"ar")
+    nar.write_bytes(b"nar")
+    doc = manifests.build(
+        command=["loralab", "mix", "--alpha", "0.1"],
+        carrier={"name": "c.safetensors"},
+        donor={"name": "d.safetensors"},
+        arms=[{"alpha": 0.1, "stem": "c__d__a0.1",
+               "out_dir": str(arm_dir),
+               "fused": {"path": str(arm_dir / "fused"), "name": "fused"},
+               "converted": {
+                   "ar": {"path": str(ar), "name": ar.name, "sha256": "a" * 64},
+                   "nar": {"path": str(nar), "name": nar.name, "sha256": "b" * 64},
+               }}],
+    )
+    manifests.write(root / "MANIFEST.json", doc)
+    return root, doc
+
+
+def test_upload_dry_run_prints_the_plan_and_writes_nothing(isolated, monkeypatch,
+                                                           capsys):
+    root, _ = _mix_dir(isolated)
+    monkeypatch.setattr(gcs, "stat_or_none", lambda *a: None)
+    assert cli.main(["upload", "--dir", str(root), "--bucket", "bkt",
+                     "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "destination: gs://bkt/OSTRIS_Arabic_Suno_Finetuning/_prototypes/mixes" in out
+    assert "MANIFEST.json" in out
+    assert not (root / "upload.json").exists()
+
+
+def test_upload_dry_run_exits_2_when_blocked(isolated, monkeypatch, capsys):
+    root, _ = _mix_dir(isolated)
+    monkeypatch.setattr(gcs, "stat_or_none", lambda *a: None)
+    assert cli.main(["upload", "--dir", str(root), "--bucket", "bkt",
+                     "--prefix", "loras/mixes", "--dry-run"]) == 2
+    assert "BLOCKED" in capsys.readouterr().out
+
+
+def test_upload_needs_exactly_one_source(isolated, capsys):
+    assert cli.main(["upload", "--bucket", "bkt", "--dry-run"]) == 2
+    assert "exactly one of --job <id> or --dir" in capsys.readouterr().err
+
+
+def test_upload_missing_manifest_is_an_error(isolated, capsys):
+    assert cli.main(["upload", "--dir", str(isolated), "--bucket", "bkt",
+                     "--dry-run"]) == 2
+    assert "no readable manifest" in capsys.readouterr().err
+
+
+def test_upload_requires_yes_when_not_a_terminal(isolated, monkeypatch, capsys):
+    root, _ = _mix_dir(isolated)
+    monkeypatch.setattr(gcs, "stat_or_none", lambda *a: None)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    assert cli.main(["upload", "--dir", str(root), "--bucket", "bkt"]) == 2
+    assert "--yes" in capsys.readouterr().err
+
+
+def test_upload_yes_applies_the_plan(isolated, monkeypatch, capsys):
+    root, _ = _mix_dir(isolated)
+    monkeypatch.setattr(gcs, "stat_or_none", lambda *a: None)
+    seen = {}
+
+    def fake_apply(cfg, plan, *, token=None, overwrite=None, log=None,
+                   record_path=None):
+        seen["plan"] = plan
+        record = {"count": plan["count"], "total_bytes": plan["total_bytes"]}
+        if record_path:
+            record_path.write_text("{}")
+        return record
+
+    monkeypatch.setattr("loralab.cli.uploadmod.apply_plan", fake_apply)
+    assert cli.main(["upload", "--dir", str(root), "--bucket", "bkt",
+                     "--yes"]) == 0
+    assert seen["plan"]["destination"] == "_prototypes/mixes/c__d"
+    assert "uploaded" in capsys.readouterr().out
+
+
+def _conformance_dir(tmp_path, *, bad=False):
+    from loralab import conformance
+    arms = []
+    for alpha in (0.1, 0.2):
+        ref = conformance.REFERENCE[alpha]
+        arms.append({"alpha": alpha, "converted": {
+            "ar": {"sha256": "0" * 64 if bad else ref["ar"]},
+            "nar": {"sha256": ref["nar"]},
+        }})
+    path = tmp_path / "MANIFEST.json"
+    path.write_text(json.dumps({
+        "kind": "mix",
+        "carrier": {"sha256": conformance.REFERENCE_INPUTS["carrier"]},
+        "donor": {"sha256": conformance.REFERENCE_INPUTS["donor"]},
+        "arms": arms,
+    }))
+    return path
+
+
+def test_conformance_passes_and_prints_the_report(isolated, capsys):
+    path = _conformance_dir(isolated)
+    assert cli.main(["conformance", "--manifest", str(path)]) == 0
+    assert "conformance: PASS" in capsys.readouterr().out
+
+
+def test_conformance_fails_with_a_nonzero_exit(isolated, capsys):
+    path = _conformance_dir(isolated, bad=True)
+    assert cli.main(["conformance", "--manifest", str(path)]) == 1
+    assert "conformance: FAIL" in capsys.readouterr().out
+
+
+def test_conformance_json_flag(isolated, capsys):
+    path = _conformance_dir(isolated)
+    assert cli.main(["conformance", "--manifest", str(path), "--json"]) == 0
+    out = capsys.readouterr().out
+    assert '"passed": true' in out
+
+
+def test_conformance_without_a_manifest_says_how(isolated, capsys):
+    assert cli.main(["conformance"]) == 2
+    assert "pass --manifest PATH" in capsys.readouterr().err

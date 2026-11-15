@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import platform
 import shutil
 from pathlib import Path
@@ -10,15 +11,50 @@ from flask import (Flask, abort, jsonify, redirect, render_template, request,
                    send_file, url_for)
 
 from .. import __version__, catalog as cat, convert as convertmod, gcs
-from .. import manifests, merge, mixjob
-from ..config import Config
+from .. import manifests, merge, mixjob, upload as uploadmod
+from ..config import (Config, ConfigError, config_values, load_config,
+                      write_config)
 
 FILTER_KINDS = ("fused", "merged", "converted")
 
 
+def _checked(value) -> bool:
+    return str(value or "").lower() in ("1", "true", "yes", "on")
+
+
+def _cache_report(cfg: Config, limit: int = 50) -> dict:
+    """What is actually on disk under cache/src and cache/tools."""
+    dirs = []
+    total = 0
+    for label, path in (("sources", cfg.cache_dir / "src"),
+                        ("tools", cfg.cache_dir / "tools")):
+        files = []
+        if path.is_dir():
+            for item in sorted(path.rglob("*"), key=lambda p: p.stat().st_mtime,
+                               reverse=True):
+                if not item.is_file():
+                    continue
+                stat = item.stat()
+                total += stat.st_size
+                files.append({
+                    "name": str(item.relative_to(path)),
+                    "size_bytes": stat.st_size,
+                    "mtime": stat.st_mtime,
+                })
+        dirs.append({
+            "name": label,
+            "path": str(path),
+            "count": len(files),
+            "bytes": sum(f["size_bytes"] for f in files),
+            "files": files[:limit],
+        })
+    usage = shutil.disk_usage(str(cfg.data_dir if cfg.data_dir.exists() else "/"))
+    return {"dirs": dirs, "total_bytes": total, "free_bytes": usage.free}
+
+
 def create_app(cfg: Config, jobs, *, scanner=None, token=None, auth_error=None,
-               mixer=None) -> Flask:
-    """Build the app. `scanner` is injectable so tests need no network."""
+               mixer=None, uploader=None) -> Flask:
+    """Build the app. `scanner`/`mixer`/`uploader` are injectable for tests."""
     app = Flask(__name__)
     app.config["LORALAB_CFG"] = cfg
     app.config["LORALAB_JOBS"] = jobs
@@ -39,6 +75,11 @@ def create_app(cfg: Config, jobs, *, scanner=None, token=None, auth_error=None,
         return mixjob.run(ctx, cfg, ctx.params, token=token)
 
     mix_fn = mixer or default_mixer
+
+    def default_uploader(ctx):
+        return uploadmod.run(ctx, cfg, ctx.params, token=token)
+
+    upload_fn = uploader or default_uploader
 
     def mix_state(wire, *, default_convert: bool):
         """Read the form/query, inspect inputs, and build a preview if possible."""
@@ -164,6 +205,84 @@ def create_app(cfg: Config, jobs, *, scanner=None, token=None, auth_error=None,
             abort(404)
         return (cfg.jobs_dir / job_id).resolve()
 
+    def upload_state(job_id: str, wire):
+        """Preview an upload from a finished mix job. Never writes anything."""
+        job = jobs.get(job_id)
+        if not job or job.get("kind") != "mix":
+            abort(404)
+        manifest_path = cfg.jobs_dir / job_id / "MANIFEST.json"
+        manifest = manifests.read(manifest_path)
+        if not manifest:
+            abort(404)
+        prefix = (wire.get("prefix") or "").strip() or cfg.upload_prefix
+        name = (wire.get("name") or "").strip()
+        state = {
+            "job": job,
+            "manifest": manifest,
+            "prefix": prefix,
+            "name": name,
+            "include_fused": _checked(wire.get("include_fused")),
+            "overwrite": _checked(wire.get("overwrite")),
+            "allow_production_prefix": _checked(wire.get("allow_production_prefix")),
+            "errors": [],
+            "plan": None,
+        }
+        try:
+            state["plan"] = uploadmod.plan_uploads(
+                cfg, manifest_path, manifest,
+                prefix=prefix, name=name or None,
+                include_fused=state["include_fused"],
+                overwrite=state["overwrite"],
+                allow_production_prefix=state["allow_production_prefix"],
+                token=token, check_existing=token is not None, job_id=job_id,
+            )
+            state["name"] = state["plan"]["directory"]
+        except uploadmod.UploadError as exc:
+            state["errors"].append(str(exc))
+        except gcs.GcsError as exc:
+            state["errors"].append(f"cannot check the destination: {exc}")
+        if token is None:
+            state["errors"].append(
+                "no credentials were resolved, so existing keys cannot be "
+                "checked and upload is disabled. Run `loralab doctor`."
+            )
+        return state
+
+    @app.get("/mix/<job_id>/upload")
+    def upload_preview(job_id: str):
+        state = upload_state(job_id, request.args)
+        return render_template("upload.html", **state)
+
+    @app.post("/mix/<job_id>/upload")
+    def upload_submit(job_id: str):
+        state = upload_state(job_id, request.form)
+        if state["errors"] or not state["plan"]:
+            return render_template("upload.html", **state), 409
+        if not _checked(request.form.get("confirm")):
+            state["errors"].append(
+                "Review the destination object names above, then tick the "
+                "confirmation box before uploading."
+            )
+            return render_template("upload.html", **state), 409
+        if state["plan"]["blockers"]:
+            return render_template("upload.html", **state), 409
+        params = {
+            "job": job_id,
+            "prefix": state["plan"]["prefix"],
+            "name": state["plan"]["directory"],
+            "include_fused": state["include_fused"],
+            "overwrite": state["overwrite"],
+            "allow_production_prefix": state["allow_production_prefix"],
+        }
+        key = uploadmod.dedupe_key(
+            cfg, Path(state["plan"]["manifest"]), prefix=params["prefix"],
+            name=params["name"], include_fused=params["include_fused"],
+            overwrite=params["overwrite"],
+            allow_production_prefix=params["allow_production_prefix"],
+        )
+        job = jobs.submit("upload", params, upload_fn, dedupe_key=key)
+        return redirect(url_for("job_view", job_id=job["id"]), code=303)
+
     @app.get("/mix/<job_id>/manifest.json")
     def mix_manifest(job_id: str):
         path = job_dir(job_id) / "MANIFEST.json"
@@ -208,6 +327,7 @@ def create_app(cfg: Config, jobs, *, scanner=None, token=None, auth_error=None,
             abort(404)
         manifest = None
         snippet = None
+        upload_record = manifests.read(cfg.jobs_dir / job_id / "upload.json")
         if job.get("kind") == "mix":
             manifest = manifests.read(cfg.jobs_dir / job_id / "MANIFEST.json")
             loras = {}
@@ -221,7 +341,8 @@ def create_app(cfg: Config, jobs, *, scanner=None, token=None, auth_error=None,
             if loras:
                 snippet = json.dumps({"loras": loras}, indent=2)
         return render_template("job.html", job=job, manifest=manifest,
-                               snippet=snippet, jobs_list=jobs.list(limit=10))
+                               snippet=snippet, upload_record=upload_record,
+                               jobs_list=jobs.list(limit=10))
 
     @app.get("/api/jobs/<job_id>")
     def job_api(job_id: str):
@@ -246,6 +367,57 @@ def create_app(cfg: Config, jobs, *, scanner=None, token=None, auth_error=None,
             abort(404)
         jobs.cancel(job_id)
         return redirect(url_for("job_view", job_id=job_id))
+
+    def settings_context(values, *, saved=False, error=None):
+        return dict(
+            values=values,
+            cache=_cache_report(cfg),
+            saved=saved,
+            error=error,
+            cfg=cfg,
+            auth_mode=getattr(token, "mode", None) or ("unknown" if auth_error else "—"),
+            auth_error=auth_error,
+            env_overrides=sorted(k for k in os.environ if k.startswith("LORALAB_")),
+        )
+
+    @app.get("/settings")
+    def settings():
+        return render_template(
+            "settings.html",
+            **settings_context(config_values(cfg), saved=request.args.get("saved") == "1"),
+        )
+
+    @app.post("/settings")
+    def save_settings():
+        nonlocal cfg
+        values = {
+            "bucket": request.form.get("bucket", ""),
+            "root": request.form.get("root", ""),
+            "prefixes": request.form.get("prefixes", ""),
+            "converter_object": request.form.get("converter_object", ""),
+            "converter_sha256": request.form.get("converter_sha256", ""),
+            "upload_prefix": request.form.get("upload_prefix", ""),
+            "host": request.form.get("host", ""),
+            "port": request.form.get("port", ""),
+            "data_dir": str(cfg.data_dir),
+        }
+        try:
+            write_config(cfg.config_path, values)
+            cfg = load_config(config_path=cfg.config_path)
+            app.config["LORALAB_CFG"] = cfg
+        except (ConfigError, OSError) as exc:
+            return render_template(
+                "settings.html",
+                **settings_context(
+                    {**values, "prefixes": [
+                        p.strip() for p in
+                        str(values["prefixes"]).replace(",", "\n").splitlines()
+                        if p.strip()
+                    ]},
+                    error=str(exc),
+                ),
+            ), 400
+        return redirect(url_for("settings", saved=1), code=303)
 
     @app.get("/doctor")
     def doctor():
@@ -290,6 +462,9 @@ def create_app(cfg: Config, jobs, *, scanner=None, token=None, auth_error=None,
                        if cached.is_file() else
                        ("not cached — will download " + cfg.converter_object
                         if cfg.bucket else "not cached and no bucket configured")))
+        checks.append(("upload", None,
+                       f"destination {cfg.upload_prefix} · create permission is "
+                       "only probed by an actual preview/upload"))
         checks.append(("python", True, platform.python_version()))
         checks.append(("data dir", True, str(cfg.data_dir)))
         return render_template("doctor.html", checks=checks,

@@ -24,11 +24,6 @@ def _cfg(args) -> Config:
     return load_config(config_path=args.config, cli=cli)
 
 
-def _token(cfg: Config):
-    cfg.require_bucket()
-    return gcs.resolve_token()
-
-
 # ---------------------------------------------------------------------------
 def cmd_serve(args) -> int:
     cfg = _cfg(args)

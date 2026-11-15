@@ -117,7 +117,7 @@ Data lives in `~/.local/share/loralab/` (`catalog.json`, `jobs/`, `cache/`).
 ## Tests
 
 ```bash
-python3 -m pytest -q          # 71 tests, no network, no credentials
+python3 -m pytest -q          # 103 tests, no network, no credentials
 ```
 
 Synthetic safetensors are built byte-for-byte in the tests and go through the same

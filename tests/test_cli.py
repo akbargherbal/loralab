@@ -123,3 +123,73 @@ def test_version_flag(capsys):
         cli.main(["--version"])
     assert err.value.code == 0
     assert "loralab" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# serve (Flask's run() is stubbed: no socket is opened)
+# ---------------------------------------------------------------------------
+def _stub_run(monkeypatch) -> dict:
+    import flask
+    seen = {}
+
+    def fake_run(self, **kwargs):
+        seen.update(kwargs)
+
+    monkeypatch.setattr(flask.Flask, "run", fake_run)
+    return seen
+
+
+def test_serve_uses_the_configured_host_and_port(isolated, monkeypatch, capsys):
+    seen = _stub_run(monkeypatch)
+    assert cli.main(["serve", "--bucket", "bkt", "--port", "5099"]) == 0
+    assert seen["port"] == 5099
+    assert seen["host"] == "127.0.0.1"
+    assert seen["use_reloader"] is False
+    out = capsys.readouterr().out
+    assert "5099" in out and "gs://bkt/" in out
+
+
+def test_serve_warns_when_binding_publicly(isolated, monkeypatch, capsys):
+    _stub_run(monkeypatch)
+    assert cli.main(["serve", "--bucket", "bkt", "--host", "0.0.0.0"]) == 0
+    assert "can write to a bucket" in capsys.readouterr().err
+
+
+def test_serve_still_serves_without_credentials(isolated, monkeypatch, capsys):
+    _stub_run(monkeypatch)
+    monkeypatch.setattr(gcs, "resolve_token",
+                        lambda *a, **k: (_ for _ in ()).throw(gcs.GcsError("no creds")))
+    assert cli.main(["serve", "--bucket", "bkt"]) == 0
+    err = capsys.readouterr().err
+    assert "no creds" in err and "catalog still loads" in err
+
+
+def test_data_dir_flag_is_honoured(isolated, monkeypatch, capsys, entry_factory):
+    target = isolated / "elsewhere"
+    cfg_path = target / "catalog.json"
+    cat.save_catalog(cfg_path, {"count": 1, "scope": "s", "generated_utc": "t",
+                                "entries": [entry_factory("a/b/c.safetensors")],
+                                "errors": []})
+    assert cli.main(["catalog", "--data-dir", str(target)]) == 0
+    assert "c.safetensors" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# error handling in main()
+# ---------------------------------------------------------------------------
+def test_gcs_error_is_reported_as_exit_2(isolated, monkeypatch, capsys):
+    monkeypatch.setattr(gcs, "resolve_token",
+                        lambda *a, **k: (_ for _ in ()).throw(gcs.GcsError("bucket is gone")))
+    assert cli.main(["scan", "--bucket", "bkt"]) == 2
+    assert "bucket is gone" in capsys.readouterr().err
+
+
+def test_config_error_is_reported_as_exit_2(isolated, capsys):
+    assert cli.main(["scan"]) == 2
+    assert "no bucket configured" in capsys.readouterr().err
+
+
+def test_ctrl_c_is_exit_130(isolated, monkeypatch, capsys):
+    monkeypatch.setattr(cat, "scan",
+                        lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt()))
+    assert cli.main(["scan", "--bucket", "bkt"]) == 130

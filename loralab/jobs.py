@@ -173,9 +173,15 @@ class Jobs:
                     job["result"] = result
             except Exception as exc:  # noqa: BLE001 — surfaced in the UI
                 job = self.get(job_id) or job
-                job["state"] = "failed"
-                job["error"] = f"{type(exc).__name__}: {exc}"
-                self.append_log(job_id, f"ERROR {job['error']}")
+                if self.cancel_requested(job_id):
+                    # A job stopped by its own cancel flag is cancelled, not broken.
+                    job["state"] = "cancelled"
+                    job["error"] = None
+                    self.append_log(job_id, "cancelled")
+                else:
+                    job["state"] = "failed"
+                    job["error"] = f"{type(exc).__name__}: {exc}"
+                    self.append_log(job_id, f"ERROR {job['error']}")
             finally:
                 job["elapsed_s"] = round(time.perf_counter() - started, 2)
                 job["ended_utc"] = _now()

@@ -192,3 +192,26 @@ def test_stat_object_reads_one_object(monkeypatch):
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     assert gcs.stat_object("b", "o", _token())["name"] == "o"
+
+
+def test_404_message_names_bucket_and_root(fake_http):
+    fake_http["pages"] = {}
+    fake_http["fail_first"] = 404
+    with pytest.raises(gcs.GcsError, match="bucket/root"):
+        gcs.list_objects("b", "p/", token=_token())
+
+
+def test_401_twice_is_a_gcs_error_not_a_loop(monkeypatch):
+    def always_401(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 401, "unauthorized", {}, None)
+
+    monkeypatch.setattr(urllib.request, "urlopen", always_401)
+    calls = []
+
+    def fetch():
+        calls.append(1)
+        return ("tok", 3000)
+
+    with pytest.raises(gcs.GcsError, match="401"):
+        gcs.read_range("b", "o", 0, 3, gcs.Token("test", fetch=fetch))
+    assert len(calls) == 2

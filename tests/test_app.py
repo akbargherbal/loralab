@@ -177,3 +177,67 @@ def test_doctor_probes_the_bucket_when_it_has_a_token(cfg, monkeypatch):
     body = app.test_client().get("/doctor").get_data(as_text=True)
     assert "2 object(s)" in body
     assert "mode: test" in body
+
+
+def test_cancel_route_flags_a_running_job(client, app):
+    import threading
+    gate = threading.Event()
+
+    def slow(ctx):
+        gate.wait(5)
+        return {}
+
+    jobs = app.config["LORALAB_JOBS"]
+    job = jobs.submit("scan", {}, slow)
+    assert jobs.cancel(job["id"]) is True          # direct
+    gate.set()
+    wait_for(jobs, job["id"])
+
+    gate.clear()
+    job2 = jobs.submit("scan", {}, slow)
+    response = client.post(f"/jobs/{job2['id']}/cancel")
+    assert response.status_code == 302
+    assert (cfg_dir := app.config["LORALAB_CFG"].jobs_dir / job2["id"] / "cancel").exists()
+    gate.set()
+    assert wait_for(jobs, job2["id"])["state"] == "cancelled"
+
+
+def test_doctor_reports_a_failing_bucket(cfg, monkeypatch):
+    from loralab import gcs
+    monkeypatch.setattr(gcs, "list_objects", lambda *a, **k: (_ for _ in ()).throw(
+        gcs.GcsError("HTTP 403 — the credentials lack storage.objects.list/get")))
+    app = create_app(cfg, Jobs(cfg.jobs_dir), token=gcs.Token("test"))
+    body = app.test_client().get("/doctor").get_data(as_text=True)
+    assert "403" in body and "fail" in body
+
+
+def test_doctor_without_a_probe_says_so(cfg):
+    app = create_app(cfg, Jobs(cfg.jobs_dir))
+    assert "not probed" in app.test_client().get("/doctor").get_data(as_text=True)
+
+
+def test_detail_404_when_there_is_no_catalog_at_all(cfg):
+    app = create_app(cfg, Jobs(cfg.jobs_dir))
+    assert app.test_client().get("/catalog/anything.safetensors").status_code == 404
+
+
+def test_unknown_job_is_404(client):
+    assert client.get("/jobs/doesnotexist").status_code == 404
+
+
+def test_default_scanner_writes_the_catalog(cfg, monkeypatch):
+    """The production wiring: no injected scanner, real code path, faked transport."""
+    from loralab import catalog as cat
+    from loralab import gcs
+
+    monkeypatch.setattr(gcs, "resolve_token", lambda: gcs.Token("test"))
+    monkeypatch.setattr(cat, "scan", lambda cfg_, tok, log=None, cancelled=None: {
+        "count": 1, "entries": [], "errors": []})
+
+    app = create_app(cfg, Jobs(cfg.jobs_dir))
+    response = app.test_client().post("/catalog/scan")
+    job_id = response.headers["Location"].rstrip("/").split("/")[-1]
+    job = wait_for(app.config["LORALAB_JOBS"], job_id)
+    assert job["state"] == "done"
+    assert job["result"] == {"count": 1, "errors": 0}
+    assert cfg.catalog_path.is_file()

@@ -74,3 +74,34 @@ def test_env_prefixes_and_data_dir(tmp_path):
     )
     assert cfg.prefixes == ("a/", "b/")
     assert cfg.data_dir == tmp_path / "d"
+
+
+def test_corrupt_config_is_reported_not_ignored(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text("bucket = [\n")
+    with pytest.raises(ConfigError, match="cannot read"):
+        load_config(config_path=path, environ={})
+
+
+def test_port_and_data_dir_from_env(tmp_path):
+    cfg = load_config(config_path=tmp_path / "a.toml",
+                      environ={"LORALAB_PORT": "8001",
+                               "LORALAB_DATA_DIR": str(tmp_path / "dd")})
+    assert cfg.port == 8001
+    assert cfg.data_dir == tmp_path / "dd"
+
+
+def test_data_dir_and_prefixes_from_file(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text(f'bucket = "b"\ndata_dir = "{tmp_path}/from-file"\n'
+                    'prefixes = ["one/", "two/"]\n')
+    cfg = load_config(config_path=path, environ={})
+    assert cfg.data_dir == tmp_path / "from-file"
+    assert cfg.prefixes == ("one/", "two/")
+
+
+def test_derived_paths_hang_off_the_data_dir(tmp_path):
+    cfg = Config(bucket="b", data_dir=tmp_path, config_path=tmp_path / "c.toml")
+    assert cfg.catalog_path == tmp_path / "catalog.json"
+    assert cfg.jobs_dir == tmp_path / "jobs"
+    assert cfg.cache_dir == tmp_path / "cache"

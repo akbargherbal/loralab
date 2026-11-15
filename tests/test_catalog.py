@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import struct
 
 import pytest
 
@@ -220,3 +221,61 @@ def test_scan_records_listing_failures_per_prefix(tmp_path, monkeypatch):
     doc = cat.scan(cfg, token=object(), log=lambda *_: None)
     assert doc["count"] == 0
     assert "404" in doc["errors"][0]["error"]
+
+
+# ---------------------------------------------------------------------------
+# transports and defensive branches
+# ---------------------------------------------------------------------------
+def test_header_that_is_not_an_object_is_rejected():
+    blob = struct.pack("<Q", 2) + b"[]"
+    with pytest.raises(ValueError, match="not a JSON object"):
+        cat.parse_header(lambda s, e: blob[s:e + 1])
+
+
+def test_header_from_gcs_delegates_to_the_transport(monkeypatch):
+    blob = st_bytes({"ss_output_name": "via-gcs"}, fused_tensors())
+    monkeypatch.setattr(cat.gcs, "read_range",
+                        lambda bucket, obj, s, e, token: blob[s:e + 1])
+    meta, tensors = cat.header_from_gcs("b", "o.safetensors", object())
+    assert meta["ss_output_name"] == "via-gcs"
+    assert len(tensors) == 4
+
+
+def test_header_from_local_reads_a_file(tmp_path):
+    path = tmp_path / "x.safetensors"
+    path.write_bytes(st_bytes({"ss_output_name": "via-file"}, fused_tensors()))
+    meta, tensors = cat.header_from_local(path)
+    assert meta["ss_output_name"] == "via-file"
+    assert len(tensors) == 4
+
+
+def test_metadata_that_is_not_an_object_is_tolerated():
+    assert cat.triggers({"ss_tag_frequency": '["a", "b"]'}) == []
+    assert cat.training({"training_info": '["a"]'}) == {}
+
+
+def test_scan_stops_at_a_cancel_checkpoint(cfg, monkeypatch):
+    monkeypatch.setattr(cat.gcs, "list_objects", lambda *a, **k: [])
+    with pytest.raises(cat.ScanCancelled):
+        cat.scan(cfg, token=object(), cancelled=lambda: True)
+
+
+def test_scan_cancels_inside_a_prefix_too(cfg, monkeypatch):
+    checks = {"n": 0}
+
+    def cancel_on_second_call():
+        checks["n"] += 1
+        return checks["n"] > 1
+
+    monkeypatch.setattr(cat.gcs, "list_objects", lambda *a, **k: [
+        {"name": "ROOT/loras/x.safetensors", "size": "1", "crc32c": "A"}])
+    monkeypatch.setattr(cat, "header_from_gcs", lambda *a: ({}, {}))
+    with pytest.raises(cat.ScanCancelled):
+        cat.scan(cfg, token=object(), cancelled=cancel_on_second_call)
+
+
+def test_malformed_merge_numbers_fall_back_to_none(entry_factory):
+    entry = entry_factory("x/m.safetensors", kind="merged",
+                          meta={"merge_alpha": "half", "merge_ar_rank": "lots"})
+    assert entry["merge"]["alpha"] is None
+    assert entry["merge"]["out_ranks"]["ar"] is None

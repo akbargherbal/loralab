@@ -3,30 +3,83 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>{% block title %}loralab{% endblock %}</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 22'%3E%3Crect x='2' y='9' width='5' height='11' rx='2.5' fill='%232260c4'/%3E%3Crect x='8.5' y='2' width='5' height='18' rx='2.5' fill='%23b02d7b'/%3E%3Crect x='15' y='6' width='5' height='14' rx='2.5' fill='%230a7787'/%3E%3C/svg%3E">
+<link rel="preload" href="{{ url_for('static', filename='fonts/instrument-sans.woff2') }}" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="{{ url_for('static', filename='fonts/spline-sans-mono.woff2') }}" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head>
 <body>
+{% set ep = request.endpoint %}
+<a class="skip" href="#main">Skip to content</a>
 <header class="top">
-  <a class="brand" href="{{ url_for('catalog_view') }}">loralab</a>
-  <nav>
-    <a href="{{ url_for('catalog_view') }}">Catalog</a>
-    <a href="{{ url_for('jobs_view') }}">Jobs</a>
-    <a href="{{ url_for('doctor') }}">Doctor</a>
-  </nav>
-  <span class="spacer"></span>
-  <span class="scope" title="bucket/root in use">{{ cfg.display_scope() }}</span>
-  {% if auth_error %}
-    <span class="badge bad" title="{{ auth_error }}">auth: none</span>
-  {% else %}
-    <span class="badge" title="auth rung in use">auth: {{ auth_mode }}</span>
-  {% endif %}
+  <div class="top-in">
+    <a class="brand" href="{{ url_for('catalog_view') }}">
+      <svg class="mark" viewBox="0 0 22 22" width="22" height="22" aria-hidden="true">
+        <rect class="b1" x="2" y="9" width="5" height="11" rx="2.5"/>
+        <rect class="b2" x="8.5" y="2" width="5" height="18" rx="2.5"/>
+        <rect class="b3" x="15" y="6" width="5" height="14" rx="2.5"/>
+      </svg>
+      loralab
+    </a>
+    <nav aria-label="Main">
+      <a href="{{ url_for('catalog_view') }}"{% if ep in ('catalog_view', 'detail', 'scan_now') %} aria-current="page"{% endif %}>Catalog</a>
+      <a href="{{ url_for('jobs_view') }}"{% if ep in ('jobs_view', 'job_view') %} aria-current="page"{% endif %}>Jobs</a>
+      <a href="{{ url_for('doctor') }}"{% if ep == 'doctor' %} aria-current="page"{% endif %}>Doctor</a>
+    </nav>
+    <span class="spacer"></span>
+    <span class="scope" title="bucket/root in use">{{ cfg.display_scope() }}</span>
+    {% if auth_error %}
+      <span class="auth bad" title="{{ auth_error }}">auth: none</span>
+    {% else %}
+      <span class="auth" title="auth rung in use">auth: {{ auth_mode }}</span>
+    {% endif %}
+  </div>
 </header>
-<main>
+<main id="main">
 {% block body %}{% endblock %}
 </main>
 <footer>
-  loralab {{ version }} · local, single-user · reads headers only, never tensor data
+  <div class="foot-in">
+    <span>loralab {{ version }}</span>
+    <span>local, single-user</span>
+    <span>reads headers only, never tensor data</span>
+  </div>
 </footer>
+<script>
+(function () {
+  // Copy buttons: any element with data-copy.
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-copy]');
+    if (!btn) return;
+    var text = btn.getAttribute('data-copy');
+    function done() {
+      btn.setAttribute('data-copied', '');
+      setTimeout(function () { btn.removeAttribute('data-copied'); }, 1400);
+    }
+    function fallback() {
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:fixed;opacity:0';
+      document.body.appendChild(ta); ta.select();
+      try { if (document.execCommand('copy')) done(); } catch (_) {}
+      document.body.removeChild(ta);
+    }
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(done, fallback);
+    } else { fallback(); }
+  });
+
+  // "/" focuses the catalog search box.
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+    var t = e.target, tag = t.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable) return;
+    var s = document.querySelector('input[type=search]');
+    if (s) { e.preventDefault(); s.focus(); s.select(); }
+  });
+})();
+</script>
 </body>
 </html>

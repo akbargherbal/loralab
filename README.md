@@ -108,7 +108,7 @@ loralab/
   gcs.py        # auth ladder, listing, Range reads
   catalog.py    # header parse → classify → lineage → catalog.json
   jobs.py       # on-disk job state, one FIFO worker, cooperative cancel
-  web/          # Flask app, Jinja templates, one small CSS file
+  web/          # Flask app, Jinja templates, one CSS file, bundled fonts (see DESIGN.md)
   cli.py        # serve | scan | catalog | doctor | init
 ```
 

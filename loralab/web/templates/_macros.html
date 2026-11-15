@@ -1,0 +1,4 @@
+{# Small icon button that copies `value` to the clipboard (see base.html). #}
+{% macro copy(value, what="value") -%}
+<button type="button" class="copy" data-copy="{{ value }}" title="Copy {{ what }}" aria-label="Copy {{ what }}"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.8"/><path d="M10.5 3.5v-.2A1.8 1.8 0 0 0 8.7 1.5H3.8a1.8 1.8 0 0 0-1.8 1.8v4.9a1.8 1.8 0 0 0 1.8 1.8h.2"/></svg></button>
+{%- endmacro %}

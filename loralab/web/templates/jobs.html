@@ -3,6 +3,7 @@
 {% block body %}
 <div class="head"><h1>Jobs</h1></div>
 {% if jobs %}
+<div class="table-wrap">
 <table>
   <thead><tr><th>id</th><th>kind</th><th>state</th><th class="num">seconds</th><th>created</th></tr></thead>
   <tbody>
@@ -17,7 +18,8 @@
   {% endfor %}
   </tbody>
 </table>
+</div>
 {% else %}
-<p class="empty">No jobs yet.</p>
+<p class="empty">No jobs yet. Start a scan from the <a href="{{ url_for('catalog_view') }}">catalog</a> and it will show up here.</p>
 {% endif %}
 {% endblock %}

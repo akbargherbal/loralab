@@ -1,29 +1,34 @@
 {% extends "base.html" %}
+{% from "_macros.html" import copy %}
 {% block title %}Job {{ job.id }} · loralab{% endblock %}
 {% block body %}
 <div class="head">
   <div>
     <h1>{{ job.kind }} <span class="state s-{{ job.state }}" id="state">{{ job.state }}</span></h1>
-    <p class="dim small mono">{{ job.id }} · started {{ job.started_utc or '—' }}
+    <p class="sub mono">{{ job.id }} · started {{ job.started_utc or '—' }}
       {% if job.elapsed_s is defined %} · {{ job.elapsed_s }} s{% endif %}</p>
   </div>
   {% if job.state in ('queued', 'running') %}
   <form method="post" action="{{ url_for('cancel_job', job_id=job.id) }}">
-    <button type="submit">Cancel</button>
+    <button class="danger" type="submit">Cancel</button>
   </form>
   {% endif %}
 </div>
 
-{% if job.error %}<p class="bad">{{ job.error }}</p>{% endif %}
+{% if job.error %}<p class="alert" role="alert">{{ job.error }}</p>{% endif %}
 
-<p class="small dim">The equivalent terminal command:</p>
-<pre class="cmd">loralab {{ job.kind }}{% for k, v in job.params.items() %}{% if k != 'scope' %} --{{ k|replace('_','-') }} {{ v }}{% endif %}{% endfor %}</pre>
+<p class="section-lead">The equivalent terminal command:</p>
+{% set cmdline %}loralab {{ job.kind }}{% for k, v in job.params.items() %}{% if k != 'scope' %} --{{ k|replace('_','-') }} {{ v }}{% endif %}{% endfor %}{% endset %}
+<div class="cmd-wrap">
+  <pre class="cmd">{{ cmdline }}</pre>
+  {{ copy(cmdline, "command") }}
+</div>
 
 <h2>Log</h2>
-<pre class="log" id="log">loading…</pre>
+<pre class="log" id="log" tabindex="0" aria-label="Job log">loading…</pre>
 
 {% if job.state not in ('queued', 'running') %}
-  <p><a href="{{ url_for('catalog_view') }}">← back to catalog</a></p>
+  <p class="back"><a href="{{ url_for('catalog_view') }}">← back to catalog</a></p>
 {% endif %}
 
 <script>
@@ -39,7 +44,12 @@
     fetch('/api/jobs/' + id + '?log_offset=' + offset)
       .then(function (r) { return r.json(); })
       .then(function (data) {
-        if (data.log) { logEl.textContent += data.log; offset = data.next_offset; }
+        if (data.log) {
+          // keep following the tail unless the reader scrolled up
+          var follow = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 24;
+          logEl.textContent += data.log; offset = data.next_offset;
+          if (follow) logEl.scrollTop = logEl.scrollHeight;
+        }
         stateEl.textContent = data.state;
         stateEl.className = 'state s-' + data.state;
         if (['done', 'failed', 'cancelled'].indexOf(data.state) >= 0) {

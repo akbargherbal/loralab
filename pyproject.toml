@@ -23,7 +23,7 @@ loralab = "loralab.cli:main"
 include = ["loralab*"]
 
 [tool.setuptools.package-data]
-"loralab.web" = ["templates/*.html", "static/*.css"]
+"loralab.web" = ["templates/*.html", "static/*.css", "static/fonts/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,25 +1,39 @@
 {% extends "base.html" %}
+{% from "_macros.html" import copy %}
 {% block title %}Doctor · loralab{% endblock %}
 {% block body %}
 <div class="head"><h1>Doctor</h1></div>
-<p class="dim small">What the app thinks it has. Paste this when something looks broken.</p>
+<p class="sub">What the app thinks it has. Paste this when something looks broken.</p>
 
+{% set ns = namespace(bad=0) %}
+{% for name, ok, detail in checks %}{% if ok is not none and not ok %}{% set ns.bad = ns.bad + 1 %}{% endif %}{% endfor %}
+<p class="verdict">
+  {% if ns.bad %}
+    <span class="status bad">{{ ns.bad }} check{{ 's' if ns.bad != 1 }} failing</span>
+  {% else %}
+    <span class="status ok">No failing checks</span>
+  {% endif %}
+</p>
+
+<div class="table-wrap">
 <table>
   <thead><tr><th>check</th><th>result</th><th>detail</th></tr></thead>
   <tbody>
   {% for name, ok, detail in checks %}
     <tr>
-      <td class="mono">{{ name }}</td>
+      <td class="check-name">{{ name }}</td>
       <td>{% if ok is none %}<span class="dim">?</span>
-          {% elif ok %}<span class="ok">ok</span>
-          {% else %}<span class="bad">fail</span>{% endif %}</td>
+          {% elif ok %}<span class="status ok">ok</span>
+          {% else %}<span class="status bad">fail</span>{% endif %}</td>
       <td class="small mono">{{ detail }}</td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
+</div>
 
 <h2>Configuration</h2>
+<div class="panel">
 <dl class="kv">
   <dt>config file</dt><dd class="mono small">{{ cfg.config_path }}
       {{ '' if cfg.config_from_file else '(absent — using defaults)' }}</dd>
@@ -30,14 +44,17 @@
   <dt>converter</dt><dd class="mono small">{{ cfg.converter_object }}</dd>
   <dt>data dir</dt><dd class="mono small">{{ cfg.data_dir }}</dd>
 </dl>
+</div>
 
 {% if catalog %}
 <h2>Catalog</h2>
+<div class="panel">
 <dl class="kv">
   <dt>generated</dt><dd class="mono small">{{ catalog.generated_utc }}</dd>
   <dt>scope</dt><dd class="mono small">{{ catalog.scope }}</dd>
   <dt>adapters</dt><dd class="mono small">{{ catalog.count }}</dd>
   <dt>errors</dt><dd class="mono small">{{ catalog.errors|length }}</dd>
 </dl>
+</div>
 {% endif %}
 {% endblock %}

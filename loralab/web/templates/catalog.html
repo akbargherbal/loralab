@@ -3,29 +3,46 @@
 {% block body %}
 <div class="head">
   <div>
-    <h1>Catalog <span class="dim">{{ total }} adapter{% if total != 1 %}s{% endif %}</span></h1>
-    <p class="dim small">
-      {{ doc.scope }} · generated {{ doc.generated_utc }} · {{ doc.tool }}
-      {% for kind, n in kinds.items() %}
-        · <span class="kind k-{{ kind }}">{{ kind }} {{ n }}</span>
-      {% endfor %}
-      {% if doc.errors %} · <span class="bad">{{ doc.errors|length }} parse error(s)</span>{% endif %}
+    <h1>Catalog <span class="dim h1-count">{{ total }} adapter{% if total != 1 %}s{% endif %}</span></h1>
+    <p class="catalog-meta">
+      <span class="mono">{{ doc.scope }}</span>
+      <span>generated {{ doc.generated_utc }}</span>
+      <span>{{ doc.tool }}</span>
+      {% if doc.errors %}<span class="bad">{{ doc.errors|length }} parse error(s)</span>{% endif %}
     </p>
   </div>
   <form method="post" action="{{ url_for('scan_now') }}">
-    <button class="primary" type="submit">Rescan</button>
+    <button type="submit">Rescan</button>
   </form>
 </div>
 
-<form class="filters" method="get" action="{{ url_for('catalog_view') }}">
-  <input type="search" name="q" value="{{ q }}" placeholder="name, trigger, path…">
-  <select name="kind">
+{% if kinds %}
+<nav class="kinds" aria-label="Filter by kind">
+  {% for k, n in kinds.items() %}
+    {% if kind == k %}
+      <a class="kind k-{{ k }}" aria-current="true" title="Show all kinds"
+         href="{{ url_for('catalog_view', q=q or None, prefix=prefix or None) }}">{{ k }} <span class="n">{{ n }}</span></a>
+    {% else %}
+      <a class="kind k-{{ k }}" title="Show only {{ k }}"
+         href="{{ url_for('catalog_view', kind=k, q=q or None, prefix=prefix or None) }}">{{ k }} <span class="n">{{ n }}</span></a>
+    {% endif %}
+  {% endfor %}
+</nav>
+{% endif %}
+
+<form class="filters" method="get" action="{{ url_for('catalog_view') }}" role="search">
+  <label class="search">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.6"/><path d="M10.5 10.5L14 14"/></svg>
+    <input type="search" name="q" value="{{ q }}" placeholder="name, trigger, path…" aria-label="Search adapters">
+    <kbd aria-hidden="true">/</kbd>
+  </label>
+  <select name="kind" aria-label="Kind">
     <option value="">all kinds</option>
     {% for k in filter_kinds %}
       <option value="{{ k }}" {% if kind == k %}selected{% endif %}>{{ k }}</option>
     {% endfor %}
   </select>
-  <select name="prefix">
+  <select name="prefix" aria-label="Prefix">
     <option value="">all prefixes</option>
     {% for p in prefixes %}
       <option value="{{ p }}" {% if prefix == p %}selected{% endif %}>{{ p }}</option>
@@ -34,7 +51,7 @@
   <button type="submit">Filter</button>
   {% if q or kind or prefix %}
     <a class="small" href="{{ url_for('catalog_view') }}">clear</a>
-    <span class="dim small">{{ shown }} of {{ total }}</span>
+    <span class="count-note">{{ shown }} of {{ total }}</span>
   {% endif %}
 </form>
 
@@ -47,8 +64,9 @@
 
 {% for group in groups %}
 <section class="group">
-  <h2>{{ group.key }} <span class="dim">{{ group.entries|length }}</span></h2>
-  <table>
+  <h2><span class="grp">{{ group.key }}</span> <span class="count">{{ group.entries|length }}</span></h2>
+  <div class="table-wrap">
+  <table class="cat">
     <thead>
       <tr><th>name</th><th>kind</th><th>rank</th><th class="num">MB</th><th>note</th></tr>
     </thead>
@@ -64,10 +82,11 @@
     {% endfor %}
     </tbody>
   </table>
+  </div>
 </section>
 {% endfor %}
 
 {% if not groups %}
-<p class="empty">Nothing matches those filters.</p>
+<p class="empty">Nothing matches those filters. <a href="{{ url_for('catalog_view') }}">Clear filters</a></p>
 {% endif %}
 {% endblock %}

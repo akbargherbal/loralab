@@ -50,6 +50,7 @@ class Config:
     root: str = DEFAULT_ROOT
     prefixes: tuple[str, ...] = tuple(DEFAULT_PREFIXES)
     converter_object: str = DEFAULT_CONVERTER
+    converter_sha256: str = ""      # empty = trust-on-first-use pin (see convert.py)
     upload_prefix: str = DEFAULT_UPLOAD_PREFIX
     host: str = "127.0.0.1"
     port: int = 5000
@@ -93,8 +94,8 @@ class Config:
 
 
 KNOWN_KEYS = {
-    "bucket", "root", "prefixes", "converter_object", "upload_prefix",
-    "host", "port", "data_dir",
+    "bucket", "root", "prefixes", "converter_object", "converter_sha256",
+    "upload_prefix", "host", "port", "data_dir",
 }
 
 
@@ -120,6 +121,7 @@ def _env_overrides(environ) -> dict:
     for key, env in (
         ("bucket", "LORALAB_BUCKET"),
         ("root", "LORALAB_ROOT"),
+        ("converter_sha256", "LORALAB_CONVERTER_SHA256"),
         ("upload_prefix", "LORALAB_UPLOAD_PREFIX"),
         ("host", "LORALAB_HOST"),
     ):
@@ -174,6 +176,7 @@ def write_default_config(path: Path, *, bucket: str = "") -> Path:
         f'root = "{DEFAULT_ROOT}"\n'
         f"prefixes = [\n  {prefixes},\n]\n"
         f'converter_object = "{DEFAULT_CONVERTER}"\n'
+        'converter_sha256 = ""\n'
         f'upload_prefix = "{DEFAULT_UPLOAD_PREFIX}"\n'
         'host = "127.0.0.1"\n'
         "port = 5000\n"

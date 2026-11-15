@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import struct
+from pathlib import Path
 
 import pytest
 
@@ -73,3 +74,76 @@ def entry_factory(tmp_path):
         return cat.make_entry(path, meta_out, tens, size=size,
                               crc32c="AAAAAA==", updated="2026-11-15T00:00:00Z")
     return make
+
+
+@pytest.fixture
+def weights_factory(tmp_path):
+    """Real (tiny) safetensors files for merge tests. Torch is imported lazily,
+    so the catalog-only test suite still runs without it."""
+    def make(name, *, rank=4, seed=1, branches=("ar", "nar"), in_dim=8,
+             out_dim=6, dtype="float32", meta=None, alpha=None):
+        import torch
+        from safetensors.torch import save_file
+
+        torch_dtype = getattr(torch, dtype)
+        gen = torch.Generator().manual_seed(seed)
+        tensors = {}
+        for branch in branches:
+            prefix = cat.AR_PREFIX if branch == "ar" else cat.NAR_PREFIX
+            base = f"{prefix}layers.0.attn.to_q"
+            tensors[f"{base}.lora_A.weight"] = torch.randn(
+                rank, in_dim, generator=gen).to(torch_dtype)
+            tensors[f"{base}.lora_B.weight"] = torch.randn(
+                out_dim, rank, generator=gen).to(torch_dtype)
+            if alpha is not None:
+                tensors[f"{base}.alpha"] = torch.tensor([float(alpha)],
+                                                        dtype=torch_dtype)
+        path = tmp_path / name
+        save_file(tensors, str(path),
+                  metadata={"ss_output_name": Path(name).stem, **(meta or {})})
+        return path
+    return make
+
+
+def converter_source(*, exit_code=0, write_nar=True, verify=True, sleep=0,
+                     stem=None, noise=True) -> str:
+    """A stand-in for the real converter: writes a pair, prints the OK line."""
+    write_ar = (
+        'save_file({k: v for k, v in t.items() if k.startswith("text_encoders")},'
+        ' str(out / (stem + "_ar.safetensors")),'
+        ' metadata={"converted_from": "x", "branch": "ar", "rank": "4",'
+        ' "source_file": src.name})'
+    )
+    write_nar = (
+        'save_file({k: v for k, v in t.items() if k.startswith("diffusion_model")},'
+        ' str(out / (stem + "_nar.safetensors")),'
+        ' metadata={"converted_from": "x", "branch": "nar", "rank": "4",'
+        ' "source_file": src.name})'
+    ) if write_nar else ""
+    return f'''
+import sys, time
+from pathlib import Path
+from safetensors.torch import load_file, save_file
+
+time.sleep({sleep})
+src = Path(sys.argv[1])
+out = Path(sys.argv[sys.argv.index("--out-dir") + 1])
+out.mkdir(parents=True, exist_ok=True)
+stem = {stem!r} or sys.argv[sys.argv.index("--stem") + 1]
+t = load_file(str(src))
+{write_ar}
+{write_nar}
+{"print('converter chatter')" if noise else ""}
+{"print('byte-level verification against the source: OK')" if verify else ""}
+sys.exit({exit_code})
+'''
+
+
+@pytest.fixture
+def fake_converter(tmp_path):
+    def make(**kwargs):
+        path = tmp_path / "convert_fake.py"
+        path.write_text(converter_source(**kwargs))
+        return path
+    return make
+

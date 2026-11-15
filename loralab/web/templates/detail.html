@@ -7,7 +7,13 @@
     <h1>{{ entry.name }}</h1>
     <p class="path-line"><span class="mono">{{ entry.path }}</span>{{ copy(entry.path, "path") }}</p>
   </div>
-  <span class="kind k-{{ entry.kind }}">{{ entry.kind }}</span>
+  <div class="head-actions">
+    {% if entry.kind in ('fused', 'merged') %}
+    <a class="button" href="{{ url_for('mix_new', carrier=entry.path) }}">Use as carrier</a>
+    <a class="button" href="{{ url_for('mix_new', donor=entry.path) }}">Use as donor</a>
+    {% endif %}
+    <span class="kind k-{{ entry.kind }}">{{ entry.kind }}</span>
+  </div>
 </div>
 
 <h2>Lineage</h2>

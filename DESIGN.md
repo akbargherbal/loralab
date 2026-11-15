@@ -45,6 +45,24 @@ dash = cancelled, pulsing dot = running).
   because the donor's up-projection is scaled by α rather than blended convexly. Values
   above 1 pin the thumb to the right edge while the number still shows the real value.
 
+## The mixer
+
+The Mix page follows the same rules as the catalog: no build step, no framework, and
+state in the URL.
+
+* **Eligibility is shown, not hidden.** Only `fused` and `merged` adapters appear in the
+  selects; a converted file is excluded because it has a different tensor layout. The
+  adapter detail page offers `Use as carrier` / `Use as donor` for the kinds that work.
+* **Preview is a GET, Mix is a POST.** Alpha suggestions are plain links that preserve
+  the current carrier, donor and output choice, so previews are shareable. A failed
+  preflight re-renders the same page as a `409` with an alert listing every reason.
+* **The preview answers the cost questions before the click**: output ranks, the uniform
+  rank the converter needs (and which branch is zero-padded to reach it), MB per arm and
+  for the grid, and free disk.
+* **The result card leads with the measurement.** α = 0 reads "identical to carrier";
+  α > 0 shows the measured `max |δ|`. Paths and sha256s follow. The fused file's sha is
+  labelled run-only; the converted AR/NAR pair is the identity.
+
 ## Tokens
 
 Defined at the top of `app.css`; light and dark follow `prefers-color-scheme`.
@@ -87,10 +105,15 @@ These add convenience without changing what any page does or which routes exist:
 
 ## What was deliberately not touched
 
-Python code, routes, template variables, JSON endpoints, the job polling logic, CLI and
-tests. Text that tests assert on (`No catalog yet`, `Merge provenance`, `Scan <scope>`,
-`ok` / `fail`, ...) is unchanged. The one inline script that existed (`job.html`)
-keeps its logic; it only gained the log-follow behaviour.
+The design pass changed no Python code, routes, template variables, JSON endpoints, the
+job polling logic, CLI or tests. Text that tests assert on (`No catalog yet`,
+`Merge provenance`, `Scan <scope>`, `ok` / `fail`, ...) is unchanged. The one inline
+script that existed (`job.html`) keeps its logic; it only gained the log-follow
+behaviour.
+
+The P2 mixer was added afterwards and reuses that vocabulary: the same `.panel`,
+`.chip`, `.state` and `.status` rules, the header's existing Mix tab, and links instead
+of new JavaScript.
 
 ## Changing the look
 

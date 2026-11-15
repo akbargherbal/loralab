@@ -1,4 +1,4 @@
-"""Command line: serve | scan | doctor | catalog."""
+"""Command line: serve | scan | catalog | mix | doctor."""
 from __future__ import annotations
 
 import argparse
@@ -7,7 +7,8 @@ import shutil
 import sys
 from pathlib import Path
 
-from . import __version__, catalog as cat, gcs
+from . import __version__, catalog as cat, convert as convertmod, gcs
+from . import manifests, merge, mixjob
 from .config import Config, ConfigError, load_config, write_default_config
 from .jobs import Jobs
 
@@ -129,6 +130,21 @@ def cmd_doctor(args) -> int:
 
     target = cfg.data_dir if cfg.data_dir.exists() else Path("/")
     print(f"disk:   {shutil.disk_usage(str(target)).free / 1e9:.1f} GB free")
+
+    env = manifests.environment()
+    missing = [name for name in ("torch", "safetensors") if not env.get(name)]
+    if missing:
+        print(f"engine: MISSING {', '.join(missing)} — install with "
+              '`pip install -e ".[merge]"`')
+        ok = False
+    else:
+        print(f"engine: torch {env['torch']} · safetensors {env['safetensors']}")
+    cached = convertmod.cached_path(cfg)
+    pin_file = cached.with_suffix(cached.suffix + ".sha256")
+    pin = (cfg.converter_sha256 or (pin_file.read_text().strip()
+                                    if pin_file.is_file() else "")) or "none"
+    print(f"converter: {'cached ' + str(cached) if cached.is_file() else 'not cached'}"
+          f" · pin {pin}")
     return 0 if ok else 1
 
 
@@ -138,6 +154,49 @@ def cmd_init(args) -> int:
     print(f"wrote {path}")
     if not args.bucket:
         print("next: put your bucket name in it, or run `loralab serve --bucket <name>`")
+    return 0
+
+
+def cmd_mix(args) -> int:
+    cfg = _cfg(args)
+    params = mixjob.build_params(
+        args.carrier, args.donor, args.alpha,
+        convert=args.convert, stem=args.stem or "",
+    )
+    slug = params.get("stem") or (
+        f"{mixjob._slug(Path(args.carrier).name)}__{mixjob._slug(Path(args.donor).name)}"
+    )
+    out = Path(args.out).expanduser() if args.out else Path(cfg.data_dir) / "mixes" / slug
+
+    if args.dry_run:
+        doc = cat.load_catalog(cfg.catalog_path)
+        alphas = mixjob.parse_alphas(params["alpha"])
+        carrier = mixjob.inspect(args.carrier, doc, cfg)
+        donor = mixjob.inspect(args.donor, doc, cfg)
+        plan = mixjob.preview(carrier, donor, alphas, cfg,
+                              convert=args.convert)
+        print(mixjob.command_text(params))
+        print(f"carrier: {carrier['name']} ({carrier['kind']}, ranks "
+              f"{mixjob._ranks(carrier)})")
+        print(f"donor:   {donor['name']} ({donor['kind']}, ranks "
+              f"{mixjob._ranks(donor)})")
+        print(f"alpha:   {', '.join(f'{a:g}' for a in alphas)}")
+        print(f"out:     {out}")
+        print(f"ranks:   {plan['out_ranks']} (target {plan['target_rank']})")
+        print(f"size:    about {plan['sizes']['total_mb']} MB for "
+              f"{plan['sizes']['arms']} arm(s); {plan['disk_free_gb']} GB free")
+        for warning in plan["warnings"]:
+            print(f"warning: {warning}")
+        for issue in plan["issues"]:
+            print(f"ERROR: {issue}", file=sys.stderr)
+        return 0 if not plan["issues"] else 2
+
+    ctx = mixjob.ConsoleContext(out, params)
+    result = mixjob.run(ctx, cfg, params, converter_path=args.converter)
+    print(f"\n{result['arms']} arm(s): alpha "
+          f"{', '.join(f'{a:g}' for a in result['alphas'])}")
+    print(f"out:      {result['out']}")
+    print(f"manifest: {result['manifest']}")
     return 0
 
 
@@ -186,6 +245,25 @@ def build_parser() -> argparse.ArgumentParser:
     add_common(d)
     d.set_defaults(func=cmd_doctor)
 
+    m = sub.add_parser("mix", help="merge a carrier and a donor at one or more alphas")
+    add_common(m)
+    m.add_argument("--carrier", required=True,
+                   help="catalog path/name or a local .safetensors file")
+    m.add_argument("--donor", required=True,
+                   help="catalog path/name or a local .safetensors file")
+    m.add_argument("--alpha", action="append", required=True,
+                   help="0..1, repeatable or comma-separated (0 = carrier only)")
+    m.add_argument("--out", default=None,
+                   help="output directory (default: <data-dir>/mixes/<carrier>__<donor>)")
+    m.add_argument("--stem", default=None, help="base name for the fused files")
+    m.add_argument("--convert", action=argparse.BooleanOptionalAction, default=True,
+                   help="run the pinned converter to produce the _ar/_nar pair")
+    m.add_argument("--converter", default=None,
+                   help="use this converter script instead of the cached/downloaded one")
+    m.add_argument("--dry-run", action="store_true",
+                   help="show ranks, sizes and the command; do not read weights")
+    m.set_defaults(func=cmd_mix)
+
     i = sub.add_parser("init", help="write a config file with working defaults")
     i.add_argument("--config", type=Path, default=None)
     i.add_argument("--bucket", default=None)
@@ -201,6 +279,9 @@ def main(argv=None) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     except gcs.GcsError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    except (merge.MergeError, convertmod.ConvertError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:

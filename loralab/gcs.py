@@ -26,6 +26,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 API = "https://storage.googleapis.com"
 SCOPES = ["https://www.googleapis.com/auth/devstorage.read_write"]
@@ -180,3 +181,37 @@ def stat_object(bucket: str, obj: str, token: Token) -> dict:
     resp = _open(url, token)
     with resp:
         return json.load(resp)
+
+
+def download_object(bucket: str, obj: str, dest, token: Token | None = None,
+                    *, log=None, chunk: int = 1 << 22,
+                    progress_bytes: int = 16 << 20) -> dict:
+    """Stream one object to `dest` and return size + sha256.
+
+    Writes to `<dest>.part` first, so a killed download never looks like a
+    complete input. Every `progress_bytes` it logs progress, which is what makes
+    a 133 MB staging step visible in the job log instead of a silent pause.
+    """
+    import hashlib
+
+    token = token or resolve_token()
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    url = f"{API}/{urllib.parse.quote(bucket, safe='')}/{urllib.parse.quote(obj, safe='/')}"
+    digest = hashlib.sha256()
+    total = 0
+    mark = 0
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    with _open(url, token) as resp, open(tmp, "wb") as fh:
+        while True:
+            block = resp.read(chunk)
+            if not block:
+                break
+            fh.write(block)
+            digest.update(block)
+            total += len(block)
+            if log and total - mark >= progress_bytes:
+                mark = total
+                log(f"  {dest.name}: {total / 1e6:.0f} MB")
+    tmp.replace(dest)
+    return {"path": str(dest), "size": total, "sha256": digest.hexdigest()}

@@ -111,7 +111,9 @@ def test_job_page_and_jobs_list_render(client, app):
     job_id = response.headers["Location"].rstrip("/").split("/")[-1]
     wait_for(app.config["LORALAB_JOBS"], job_id)
     assert client.get(f"/jobs/{job_id}").status_code == 200
-    assert "loralab scan" in client.get(f"/jobs/{job_id}").get_data(as_text=True)
+    body = client.get(f"/jobs/{job_id}").get_data(as_text=True)
+    assert "loralab scan" in body
+    assert "--prefix " in body and "--prefixes" not in body
     assert job_id in client.get("/jobs").get_data(as_text=True)
 
 
@@ -223,6 +225,8 @@ def test_detail_404_when_there_is_no_catalog_at_all(cfg):
 
 def test_unknown_job_is_404(client):
     assert client.get("/jobs/doesnotexist").status_code == 404
+    assert client.get("/jobs/bad-id").status_code == 404
+    assert client.get("/api/jobs/bad-id").status_code == 404
 
 
 def test_default_scanner_writes_the_catalog(cfg, monkeypatch):

@@ -282,3 +282,62 @@ def test_a_refresher_that_returns_nothing_says_so():
     token = gcs.Token("test", fetch=lambda: ("", 0))
     with pytest.raises(gcs.GcsError, match="returned no token"):
         token.get()
+
+
+# ---------------------------------------------------------------------------
+# streaming download (mix staging)
+# ---------------------------------------------------------------------------
+class ChunkedResp:
+    def __init__(self, data: bytes):
+        self.data, self.pos = data, 0
+
+    def read(self, n=None):
+        block = self.data[self.pos:self.pos + (n or len(self.data))]
+        self.pos += len(block)
+        return block
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_a):
+        return False
+
+
+def test_download_object_streams_hashes_and_logs_progress(tmp_path, monkeypatch):
+    payload = b"0123456789"
+    urls = []
+
+    def fake_open(url, token, headers=None):
+        urls.append(url)
+        return ChunkedResp(payload)
+
+    monkeypatch.setattr(gcs, "_open", fake_open)
+    logs = []
+    dest = tmp_path / "nested" / "obj.safetensors"
+    got = gcs.download_object("b", "root/obj.safetensors", dest,
+                              token=_token(), log=logs.append, chunk=4,
+                              progress_bytes=4)
+    assert dest.read_bytes() == payload
+    assert not dest.with_suffix(".safetensors.part").exists()
+    assert got["size"] == len(payload)
+    assert got["sha256"] == (
+        "84d89877f0d4041efb6bf91a16f0248f2fd573e6af05c19f96bedb9f882f7882")
+    assert got["path"] == str(dest)
+    assert logs and "obj.safetensors" in logs[0]
+    assert "root%2Fobj.safetensors" in urls[0] or "root/obj.safetensors" in urls[0]
+
+
+def test_download_object_without_a_token_resolves_one(tmp_path, monkeypatch):
+    monkeypatch.setattr(gcs, "_open", lambda *a, **k: ChunkedResp(b"x"))
+    monkeypatch.setattr(gcs, "resolve_token", lambda: _token())
+    got = gcs.download_object("b", "obj", tmp_path / "x", token=None)
+    assert got["size"] == 1
+
+
+def test_download_object_surfaces_a_storage_error(tmp_path, monkeypatch):
+    def deny(*_a, **_k):
+        raise gcs.GcsError("HTTP 403 denied")
+
+    monkeypatch.setattr(gcs, "_open", deny)
+    with pytest.raises(gcs.GcsError, match="403"):
+        gcs.download_object("b", "obj", tmp_path / "x", token=_token())

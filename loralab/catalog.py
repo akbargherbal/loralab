@@ -174,8 +174,11 @@ def make_entry(path: str, meta: dict, tensors: dict, *, size=None, md5=None,
             "tool": meta.get("merge_tool"),
             "kind": meta.get("merge_kind"),
             "alpha": _as_float(meta.get("merge_alpha")),
+            "carrier_name": meta.get("merge_carrier_name"),
             "carrier_sha256": meta.get("merge_v2_sha256"),
-            "donor_name": meta.get("merge_quran"),
+            # `merge_quran` is the legacy field upstream tools wrote; a file
+            # from either side stays readable.
+            "donor_name": meta.get("merge_donor_name") or meta.get("merge_quran"),
             "donor_sha256": meta.get("merge_quran_sha256"),
             "out_ranks": {
                 "ar": _as_int(meta.get("merge_ar_rank")),

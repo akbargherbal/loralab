@@ -233,3 +233,111 @@ def test_cli_module_also_runs_as_a_script():
     result = _run_module("loralab.cli")
     assert result.returncode == 0
     assert "loralab" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# mix
+# ---------------------------------------------------------------------------
+def test_mix_dry_run_reports_the_plan(isolated, weights_factory, capsys):
+    pytest.importorskip("torch")
+    carrier = weights_factory("carrier.safetensors", rank=4)
+    donor = weights_factory("donor.safetensors", rank=4)
+    code = cli.main(["mix", "--carrier", str(carrier), "--donor", str(donor),
+                     "--alpha", "0.1,0.2", "--dry-run"])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "loralab mix" in out
+    assert "alpha:   0.1, 0.2" in out
+    assert "ranks:" in out and "'ar': 8" in out and "'nar': 8" in out
+    assert "size:" in out
+
+
+def test_mix_dry_run_rejects_an_out_of_range_alpha(isolated, weights_factory,
+                                                    capsys):
+    pytest.importorskip("torch")
+    carrier = weights_factory("carrier.safetensors", rank=4)
+    donor = weights_factory("donor.safetensors", rank=4)
+    code = cli.main(["mix", "--carrier", str(carrier), "--donor", str(donor),
+                     "--alpha", "2", "--dry-run"])
+    assert code == 2
+    assert "not a percentage" in capsys.readouterr().err
+
+
+def test_mix_requires_at_least_one_alpha(isolated, weights_factory):
+    pytest.importorskip("torch")
+    carrier = weights_factory("c.safetensors")
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["mix", "--carrier", str(carrier), "--donor", str(carrier)])
+    assert exc.value.code == 2
+
+
+def test_mix_runs_local_files_and_writes_a_manifest(isolated, weights_factory,
+                                                    fake_converter, tmp_path,
+                                                    capsys):
+    pytest.importorskip("torch")
+    carrier = weights_factory("carrier.safetensors", rank=4)
+    donor = weights_factory("donor.safetensors", rank=4)
+    out = tmp_path / "mixes"
+    code = cli.main(["mix", "--carrier", str(carrier), "--donor", str(donor),
+                     "--alpha", "0", "--alpha", "0.2", "--out", str(out),
+                     "--converter", str(fake_converter())])
+    assert code == 0
+    text = capsys.readouterr().out
+    assert "2 arm(s)" in text
+    assert (out / "MANIFEST.json").is_file()
+    assert (out / "a0.2" / "carrier__donor__a0.2_ar.safetensors").is_file()
+
+
+def test_mix_without_conversion_skips_the_converter(isolated, weights_factory,
+                                                    tmp_path, capsys):
+    pytest.importorskip("torch")
+    carrier = weights_factory("carrier.safetensors", rank=4)
+    donor = weights_factory("donor.safetensors", rank=4)
+    out = tmp_path / "plain"
+    code = cli.main(["mix", "--carrier", str(carrier), "--donor", str(donor),
+                     "--alpha", "0.5", "--out", str(out), "--no-convert"])
+    assert code == 0
+    assert (out / "a0.5" / "carrier__donor__a0.5.safetensors").is_file()
+    assert not any(p.name.endswith("_ar.safetensors") for p in out.rglob("*"))
+
+
+def test_mix_reports_a_missing_input_as_exit_2(isolated, weights_factory, capsys):
+    pytest.importorskip("torch")
+    carrier = weights_factory("carrier.safetensors")
+    assert cli.main(["mix", "--carrier", str(carrier),
+                     "--donor", str(carrier.parent / "nope.safetensors"),
+                     "--alpha", "0.2"]) == 2
+    assert "input not found" in capsys.readouterr().err
+
+
+def test_doctor_prints_the_engine_and_converter(isolated, monkeypatch, capsys):
+    monkeypatch.setattr(gcs, "list_objects", lambda *a, **k: [])
+    cli.main(["doctor", "--bucket", "bkt"])
+    out = capsys.readouterr().out
+    assert "engine:" in out
+    assert "converter:" in out
+
+
+def test_doctor_reports_a_missing_merge_engine(isolated, monkeypatch, capsys):
+    monkeypatch.setattr(gcs, "list_objects", lambda *a, **k: [])
+    monkeypatch.setattr(cli.manifests, "environment", lambda: {
+        "torch": None, "safetensors": None, "loralab": "0.1.0"})
+    assert cli.main(["doctor", "--bucket", "bkt"]) == 1
+    out = capsys.readouterr().out
+    assert "engine: MISSING" in out and '".[merge]"' in out
+
+
+def test_mix_dry_run_refuses_a_converted_input(isolated, weights_factory, tmp_path,
+                                               capsys):
+    torch = pytest.importorskip("torch")
+    from safetensors.torch import save_file
+
+    carrier = weights_factory("carrier.safetensors")
+    converted = tmp_path / "converted.safetensors"
+    save_file({"layers.0.lora_A.weight": torch.zeros(4, 8)},
+              str(converted),
+              metadata={"converted_from": "x", "branch": "ar", "rank": "4"})
+    code = cli.main(["mix", "--carrier", str(carrier), "--donor", str(converted),
+                     "--alpha", "0.2", "--dry-run"])
+    assert code == 2
+    assert "only fused or merged" in capsys.readouterr().err

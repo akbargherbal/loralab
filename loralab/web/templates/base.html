@@ -25,6 +25,7 @@
     </a>
     <nav aria-label="Main">
       <a href="{{ url_for('catalog_view') }}"{% if ep in ('catalog_view', 'detail', 'scan_now') %} aria-current="page"{% endif %}>Catalog</a>
+      <a href="{{ url_for('mix_new') }}"{% if ep in ('mix_new', 'mix_submit') %} aria-current="page"{% endif %}>Mix</a>
       <a href="{{ url_for('jobs_view') }}"{% if ep in ('jobs_view', 'job_view') %} aria-current="page"{% endif %}>Jobs</a>
       <a href="{{ url_for('doctor') }}"{% if ep == 'doctor' %} aria-current="page"{% endif %}>Doctor</a>
     </nav>
@@ -44,7 +45,7 @@
   <div class="foot-in">
     <span>loralab {{ version }}</span>
     <span>local, single-user</span>
-    <span>reads headers only, never tensor data</span>
+    <span>reads headers to catalog; tensors only when you mix</span>
   </div>
 </footer>
 <script>

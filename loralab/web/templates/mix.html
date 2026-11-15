@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Mix · loralab{% endblock %}
+{% block body %}
+<div class="head">
+  <div>
+    <h1>Mix two adapters</h1>
+    <p class="sub">Carrier + α × donor by rank concatenation, then the pinned converter
+      writes the audio.cpp <span class="mono">_ar</span>/<span class="mono">_nar</span> pair.</p>
+  </div>
+</div>
+
+{% if errors %}
+<div class="alert" role="alert">
+  <strong>Cannot build this mix</strong>
+  <ul>{% for error in errors %}<li>{{ error }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<form class="mix-form" method="get" action="{{ url_for('mix_new') }}">
+  <div class="form-grid">
+    <label class="field">
+      <span>carrier <span class="dim">the adapter you keep; α = 0 is exactly this file</span></span>
+      <select name="carrier">
+        <option value="">— choose a fused or merged adapter —</option>
+        {% for e in eligible %}
+        <option value="{{ e.path }}"{% if e.path == carrier %} selected{% endif %}>{{ e.kind }} · {{ e.name }} — {{ e.path }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label class="field">
+      <span>donor <span class="dim">folded in at α, into the up-projection</span></span>
+      <select name="donor">
+        <option value="">— choose a fused or merged adapter —</option>
+        {% for e in eligible %}
+        <option value="{{ e.path }}"{% if e.path == donor %} selected{% endif %}>{{ e.kind }} · {{ e.name }} — {{ e.path }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label class="field">
+      <span>alpha <span class="dim">0 to 1, comma-separated for a grid</span></span>
+      <input type="text" name="alpha" value="{{ alpha_text }}" inputmode="decimal"
+             spellcheck="false" autocomplete="off">
+    </label>
+
+    <label class="field">
+      <span>stem <span class="dim">optional; default carrier__donor</span></span>
+      <input type="text" name="stem" value="{{ stem }}" spellcheck="false"
+             autocomplete="off" placeholder="qahh">
+    </label>
+
+    <label class="field">
+      <span>output</span>
+      <select name="convert">
+        <option value="1"{% if convert %} selected{% endif %}>fused file + converted _ar/_nar pair</option>
+        <option value="0"{% if not convert %} selected{% endif %}>fused file only (no converter)</option>
+      </select>
+    </label>
+  </div>
+
+  <div class="alpha-chips">
+    <span class="dim small">alpha:</span>
+    {% for a in ['0', '0.1', '0.2', '0.3', '0.5', '1'] %}
+      <a class="chip" href="{{ url_for('mix_new', carrier=carrier, donor=donor, alpha=a, stem=stem, convert=(1 if convert else 0)) }}">{{ a }}</a>
+    {% endfor %}
+    {% if not eligible %}<span class="dim small">No catalog yet — <a href="{{ url_for('catalog_view') }}">scan first</a>.</span>{% endif %}
+  </div>
+
+  <div class="form-actions">
+    <button type="submit">Preview</button>
+    <button class="primary" type="submit" formaction="{{ url_for('mix_submit') }}" formmethod="post">Mix</button>
+  </div>
+</form>
+
+{% if plan %}
+<h2>Preview</h2>
+<div class="facts">
+  <div class="panel">
+    <h3>Structure</h3>
+    <dl class="kv">
+      <dt>out ranks</dt>
+      <dd class="mono">{% for branch, rank in plan.out_ranks.items() %}{{ branch }}:{{ rank }}{% if not loop.last %}, {% endif %}{% endfor %}</dd>
+      <dt>uniform rank</dt><dd class="mono">{{ plan.target_rank }}</dd>
+      <dt>donor folds</dt><dd class="mono">{{ plan.donor_branches|join(', ') }}</dd>
+    </dl>
+  </div>
+  <div class="panel">
+    <h3>Size</h3>
+    <dl class="kv">
+      <dt>per arm</dt><dd class="mono">{{ plan.sizes.per_arm_mb }} MB</dd>
+      <dt>all arms</dt><dd class="mono">{{ plan.sizes.total_mb }} MB ({{ plan.sizes.arms }})</dd>
+      <dt>fused</dt><dd class="mono">{{ plan.sizes.fused_mb }} MB</dd>
+      {% if convert %}<dt>converted pair</dt><dd class="mono">{{ plan.sizes.converted_pair_mb }} MB</dd>{% endif %}
+      <dt>disk free</dt><dd class="mono">{{ plan.disk_free_gb }} GB</dd>
+    </dl>
+  </div>
+</div>
+{% if plan.warnings %}
+<p class="section-lead">Warnings</p>
+<ul class="notes">{% for warning in plan.warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
+{% endif %}
+{% else %}
+<p class="dim">Choose a carrier and a donor, then Preview. Only fused or merged adapters
+  are eligible: a converted file has a different layout and no alpha key.</p>
+{% endif %}
+
+<p class="back"><a href="{{ url_for('catalog_view') }}">← back to catalog</a></p>
+{% endblock %}

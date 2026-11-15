@@ -12,9 +12,13 @@ at runtime.
 
 
 > **Status (2026-11-15):** P1 is built and shipped — `loralab serve` shows the catalog,
-> adapter detail, provenance, lineage, jobs and a doctor page. 116 tests, no network, no
-> credentials. P2 (mix) is next and carries the conformance gate described in §8.
-> This file is the design record; keep it in sync with the code or delete it.
+> adapter detail, provenance, lineage, jobs and a doctor page. P2 (mix) is built too:
+> `loralab mix` and the Mix page stage inputs, build a rank-concatenation grid, convert
+> with the pinned tool, and write `MANIFEST.json`. The published-artifact conformance
+> gate in §8 has not yet been run against the real GCS pair (it needs the artifacts);
+> the arithmetic is pinned by unit tests, including the α=0 identity and padding.
+> P3 (upload) is next. This file is the design record; keep it in sync with the code or
+> delete it.
 
 ---
 
@@ -157,8 +161,9 @@ Per α, checkpointed so a crash resumes:
    `.alpha` key and cannot be an input); branch layout (`ar`+`nar` → `merge_quran` style,
    `ar`-only donor → `merge_pron` style, NAR copied and zero-padded); one rank per branch per
    input; same tensor key set; α ∈ [0,1]; disk ≥ 1.5× the estimate.
-3. **merge** → `jobs/<id>/fused/a<α>/<carrier-basename>.safetensors`. At α = 0 keep the carrier's
-   basename — otherwise the identity check below loses meaning.
+3. **merge** → `jobs/<id>/a<α>/<stem>.safetensors` (α = 0 keeps the carrier's
+   basename — otherwise the identity check below loses meaning). The manifest is
+   rewritten after every arm: `jobs/<id>/MANIFEST.json` plus one sidecar per arm.
 4. **verify** — α = 0: `torch.equal` over every tensor vs the carrier. α ≠ 0: `B_mix@A_mix ==
    B_c@A_c + α·(B_d@A_d)` over the projections, and **report the measured error** (3.0e-8 at
    α = 0.5 is exact; 3.5e-5 at α = 0.2 is bf16 rounding of the scaled block — both correct).
@@ -201,7 +206,7 @@ The previous attempt spent a whole session and shipped no UI. Order is chosen ag
 | phase | deliverable | done when |
 |---|---|---|
 | **P1** | `loralab serve` — app shell + catalog + adapter detail, reading a configured bucket | you open `127.0.0.1:5000` in a browser and see the real adapter table; no page can write |
-| **P2** | mix: form → job → verify → convert → manifest → result card | the conformance gate (§8) passes: published arms reproduced |
+| **P2** | mix: form → job → verify → convert → manifest → result card | **built**; the §8 conformance gate still needs the published artifacts |
 | **P3** | upload with dry-run preview + prefix guard | upload is off by default; the destination is named before it happens |
 | **P4** | polish: cache panel, settings page, `doctor`, keyboard/URL state | a repeat build on cached sources is < 3 s wall |
 

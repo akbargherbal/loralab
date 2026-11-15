@@ -17,8 +17,86 @@
 
 {% if job.error %}<p class="alert" role="alert">{{ job.error }}</p>{% endif %}
 
+{% if job.kind == 'mix' and manifest %}
+<h2>Result</h2>
+{% for arm in manifest.arms %}
+<section class="panel arm">
+  <h3>α {{ arm.alpha }}
+    {% if arm.verify %}
+      <span class="status {{ 'ok' if arm.verify.passed else 'bad' }}">
+        {% if arm.verify.kind == 'identity' %}identical to carrier
+        {% else %}max |δ| {{ '%.1e'|format(arm.verify.max_abs_error) }}{% endif %}
+      </span>
+    {% endif %}
+  </h3>
+  <dl class="kv">
+    <dt>ranks</dt>
+    <dd class="mono">{% for branch, rank in arm.fused.ranks.items() %}{{ branch }}:{{ rank }}{% if not loop.last %}, {% endif %}{% endfor %}</dd>
+    <dt>fused</dt>
+    <dd class="mono">
+      {% set fused_rel = arm.fused.path.replace('\\', '/').split('/')[-2:]|join('/') %}
+      <a href="{{ url_for('mix_artifact', job_id=job.id, rel=fused_rel) }}">{{ arm.fused.name }}</a>
+      · {{ '%.1f'|format((arm.fused.size_bytes or 0) / 1048576) }} MB
+      · sha256 {{ arm.fused.sha256 }}{{ copy(arm.fused.sha256, "fused sha256") }}
+    </dd>
+    {% if arm.converted %}
+      {% for branch in ['ar', 'nar'] %}
+        {% set item = arm.converted[branch] %}
+        {% set rel = item.path.replace('\\', '/').split('/')[-2:]|join('/') %}
+        <dt>converted {{ branch }}</dt>
+        <dd class="mono">
+          <a href="{{ url_for('mix_artifact', job_id=job.id, rel=rel) }}">{{ item.name }}</a>
+          · rank {{ item.rank }} · {{ '%.1f'|format((item.size_bytes or 0) / 1048576) }} MB
+          <br><span class="small">sha256 {{ item.sha256 }}</span>{{ copy(item.sha256, "converted " ~ branch ~ " sha256") }}
+        </dd>
+      {% endfor %}
+    {% endif %}
+  </dl>
+</section>
+{% endfor %}
+<div class="panel">
+  <dl class="kv">
+    <dt>manifest</dt>
+    <dd><a class="mono" href="{{ url_for('mix_manifest', job_id=job.id) }}">MANIFEST.json</a></dd>
+    <dt>output</dt><dd class="mono small">{{ manifest.arms[0].out_dir }}</dd>
+    <dt>identity</dt><dd class="dim small">the converted AR/NAR sha256 is reproducible; the fused whole-file sha256 is this run only (metadata map order).</dd>
+  </dl>
+</div>
+{% endif %}
+
+{% if snippet %}
+<h2>Use it</h2>
+<div class="panel">
+  <p class="dim small">A songs-JSON fragment that names the pair explicitly. A
+    <span class="mono">dir</span> shorthand only resolves the legacy basenames.</p>
+  <div class="json-wrap">
+    <pre class="json">{{ snippet }}</pre>
+    {{ copy(snippet, "songs JSON") }}
+  </div>
+</div>
+{% endif %}
+
 <p class="section-lead">The equivalent terminal command:</p>
-{% set cmdline %}loralab {{ job.kind }}{% for k, v in job.params.items() %}{% if k != 'scope' %} --{{ k|replace('_','-') }} {{ v }}{% endif %}{% endfor %}{% endset %}
+{% set ns = namespace(parts=['loralab', job.kind]) %}
+{% for k, v in job.params.items() %}
+  {% if k != 'scope' %}
+    {% set flag = {'prefixes': 'prefix'}.get(k, k) %}
+    {% if v is sameas true %}
+      {% set _ = ns.parts.append('--' ~ flag) %}
+    {% elif v is sameas false %}
+      {% set _ = ns.parts.append('--no-' ~ flag) %}
+    {% elif v is string or v is number %}
+      {% set _ = ns.parts.append('--' ~ flag) %}
+      {% set _ = ns.parts.append('"' ~ v ~ '"') %}
+    {% elif v is not none %}
+      {% for item in v %}
+        {% set _ = ns.parts.append('--' ~ flag) %}
+        {% set _ = ns.parts.append('"' ~ item ~ '"') %}
+      {% endfor %}
+    {% endif %}
+  {% endif %}
+{% endfor %}
+{% set cmdline = ns.parts|join(' ') %}
 <div class="cmd-wrap">
   <pre class="cmd">{{ cmdline }}</pre>
   {{ copy(cmdline, "command") }}

@@ -13,9 +13,20 @@ def test_defaults_have_no_bucket_but_everything_after_it(tmp_path):
     assert cfg.root == DEFAULT_ROOT
     assert cfg.prefixes == tuple(DEFAULT_PREFIXES)
     assert cfg.converter_object.startswith("audiocpp_inference/converter/")
+    assert cfg.converter_sha256 == ""
     assert cfg.upload_prefix.startswith("_prototypes/")
     assert cfg.host == "127.0.0.1"
     assert cfg.config_from_file is False
+
+
+def test_converter_pin_comes_from_file_or_env(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('converter_sha256 = "from-file"\n')
+    cfg = load_config(config_path=path, environ={})
+    assert cfg.converter_sha256 == "from-file"
+    cfg = load_config(config_path=path,
+                      environ={"LORALAB_CONVERTER_SHA256": "from-env"})
+    assert cfg.converter_sha256 == "from-env"
 
 
 def test_require_bucket_explains_the_three_ways(tmp_path):

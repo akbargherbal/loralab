@@ -42,6 +42,7 @@
   <dt>prefixes</dt><dd class="mono small">{{ cfg.prefixes|join(', ') }}</dd>
   <dt>upload prefix</dt><dd class="mono small">{{ cfg.upload_prefix }}</dd>
   <dt>converter</dt><dd class="mono small">{{ cfg.converter_object }}</dd>
+  <dt>converter pin</dt><dd class="mono small">{{ cfg.converter_sha256 or 'trust on first use (cache/tools/*.sha256)' }}</dd>
   <dt>data dir</dt><dd class="mono small">{{ cfg.data_dir }}</dd>
 </dl>
 </div>

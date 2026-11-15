@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Not found · loralab{% endblock %}
+{% block body %}
+<div class="head"><h1>Not found</h1></div>
+<p>That adapter is not in the catalog. It may belong to a prefix you did not scan —
+check <a href="{{ url_for('doctor') }}">Doctor</a> for the configured prefixes, or rescan.</p>
+<p><a href="{{ url_for('catalog_view') }}">← catalog</a></p>
+{% endblock %}

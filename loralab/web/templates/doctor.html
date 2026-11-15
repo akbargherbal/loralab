@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Doctor · loralab{% endblock %}
+{% block body %}
+<div class="head"><h1>Doctor</h1></div>
+<p class="dim small">What the app thinks it has. Paste this when something looks broken.</p>
+
+<table>
+  <thead><tr><th>check</th><th>result</th><th>detail</th></tr></thead>
+  <tbody>
+  {% for name, ok, detail in checks %}
+    <tr>
+      <td class="mono">{{ name }}</td>
+      <td>{% if ok is none %}<span class="dim">?</span>
+          {% elif ok %}<span class="ok">ok</span>
+          {% else %}<span class="bad">fail</span>{% endif %}</td>
+      <td class="small mono">{{ detail }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>Configuration</h2>
+<dl class="kv">
+  <dt>config file</dt><dd class="mono small">{{ cfg.config_path }}
+      {{ '' if cfg.config_from_file else '(absent — using defaults)' }}</dd>
+  <dt>bucket</dt><dd class="mono small">{{ cfg.bucket or '— set one: loralab serve --bucket <name>' }}</dd>
+  <dt>root</dt><dd class="mono small">{{ cfg.root or '(bucket root)' }}</dd>
+  <dt>prefixes</dt><dd class="mono small">{{ cfg.prefixes|join(', ') }}</dd>
+  <dt>upload prefix</dt><dd class="mono small">{{ cfg.upload_prefix }}</dd>
+  <dt>converter</dt><dd class="mono small">{{ cfg.converter_object }}</dd>
+  <dt>data dir</dt><dd class="mono small">{{ cfg.data_dir }}</dd>
+</dl>
+
+{% if catalog %}
+<h2>Catalog</h2>
+<dl class="kv">
+  <dt>generated</dt><dd class="mono small">{{ catalog.generated_utc }}</dd>
+  <dt>scope</dt><dd class="mono small">{{ catalog.scope }}</dd>
+  <dt>adapters</dt><dd class="mono small">{{ catalog.count }}</dd>
+  <dt>errors</dt><dd class="mono small">{{ catalog.errors|length }}</dd>
+</dl>
+{% endif %}
+{% endblock %}

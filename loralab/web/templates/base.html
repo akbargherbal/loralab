@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}loralab{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="{{ url_for('catalog_view') }}">loralab</a>
+  <nav>
+    <a href="{{ url_for('catalog_view') }}">Catalog</a>
+    <a href="{{ url_for('jobs_view') }}">Jobs</a>
+    <a href="{{ url_for('doctor') }}">Doctor</a>
+  </nav>
+  <span class="spacer"></span>
+  <span class="scope" title="bucket/root in use">{{ cfg.display_scope() }}</span>
+  {% if auth_error %}
+    <span class="badge bad" title="{{ auth_error }}">auth: none</span>
+  {% else %}
+    <span class="badge" title="auth rung in use">auth: {{ auth_mode }}</span>
+  {% endif %}
+</header>
+<main>
+{% block body %}{% endblock %}
+</main>
+<footer>
+  loralab {{ version }} · local, single-user · reads headers only, never tensor data
+</footer>
+</body>
+</html>

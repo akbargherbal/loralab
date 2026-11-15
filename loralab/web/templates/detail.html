@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}{{ entry.name }} · loralab{% endblock %}
+{% block body %}
+<div class="head">
+  <div>
+    <h1>{{ entry.name }}</h1>
+    <p class="dim small mono">{{ entry.path }}</p>
+  </div>
+  <span class="kind k-{{ entry.kind }}">{{ entry.kind }}</span>
+</div>
+
+<dl class="kv">
+  <dt>rank</dt><dd class="mono">{{ rank_label(entry) }}</dd>
+  <dt>branches</dt><dd class="mono">{{ entry.branches|join(', ') }}</dd>
+  <dt>tensors</dt><dd class="mono">{{ entry.tensors }}</dd>
+  <dt>dtype</dt><dd class="mono">{{ entry.dtype|join(', ') }}</dd>
+  <dt>size</dt><dd class="mono">{{ '%.1f'|format((entry.size_bytes or 0) / 1048576) }} MB</dd>
+  {% if entry.base_model %}<dt>base model</dt><dd class="mono">{{ entry.base_model }}</dd>{% endif %}
+  {% if entry.software %}<dt>software</dt><dd class="mono">{{ entry.software }}</dd>{% endif %}
+  {% if entry.output_name %}<dt>output name</dt><dd class="mono">{{ entry.output_name }}</dd>{% endif %}
+  {% if entry.training %}
+    <dt>training</dt>
+    <dd class="mono">{% for k, v in entry.training.items() %}{{ k }}={{ v }} {% endfor %}</dd>
+  {% endif %}
+  {% if entry.triggers %}
+    <dt>triggers</dt>
+    <dd>{% for t in entry.triggers %}<span class="chip">{{ t }}</span>{% endfor %}</dd>
+  {% endif %}
+  {% if entry.crc32c %}<dt>crc32c</dt><dd class="mono small">{{ entry.crc32c }}</dd>{% endif %}
+  {% if entry.md5 %}<dt>md5</dt><dd class="mono small">{{ entry.md5 }}</dd>{% endif %}
+  {% if entry.sha256 %}<dt>sha256</dt><dd class="mono small">{{ entry.sha256 }}</dd>{% endif %}
+  {% if entry.updated %}<dt>updated</dt><dd class="mono small">{{ entry.updated }}</dd>{% endif %}
+</dl>
+
+{% if entry.kind == 'merged' and entry.merge %}
+<h2>Merge provenance</h2>
+<dl class="kv">
+  <dt>alpha</dt><dd class="mono">{{ entry.merge.alpha }}</dd>
+  <dt>tool</dt><dd class="mono">{{ entry.merge.tool }}</dd>
+  <dt>out ranks</dt><dd class="mono">ar {{ entry.merge.out_ranks.ar }} / nar {{ entry.merge.out_ranks.nar }}</dd>
+  <dt>carrier sha</dt><dd class="mono small">{{ entry.merge.carrier_sha256 or '—' }}</dd>
+  <dt>donor</dt><dd class="mono small">{{ entry.merge.donor_name or '—' }}</dd>
+  <dt>donor sha</dt><dd class="mono small">{{ entry.merge.donor_sha256 or '—' }}</dd>
+</dl>
+{% endif %}
+
+<h2>Lineage</h2>
+{% if entry.lineage is defined %}
+  <p class="small">
+    {% if entry.lineage.resolved %}
+      <span class="ok">resolved</span>
+      {% if entry.lineage.fused_path %}
+        → <a href="{{ url_for('detail', name=entry.lineage.fused_path) }}">{{ entry.lineage.fused_path }}</a>
+      {% endif %}
+      {% if entry.lineage.carrier_path %}
+        · carrier <a href="{{ url_for('detail', name=entry.lineage.carrier_path) }}">{{ entry.lineage.carrier_path }}</a>
+      {% endif %}
+      {% if entry.lineage.donor_path %}
+        · donor <a href="{{ url_for('detail', name=entry.lineage.donor_path) }}">{{ entry.lineage.donor_path }}</a>
+      {% endif %}
+    {% else %}
+      <span class="dim">link unknown</span> — the source/carrier is not in this catalog, or its
+      sha256 was never computed. It is not guessed from a filename.
+    {% endif %}
+  </p>
+{% else %}
+  <p class="dim small">No upstream link for this kind of file.</p>
+{% endif %}
+
+{% if siblings %}
+<h2>Converted from this file</h2>
+<ul class="plain">
+  {% for s in siblings %}
+  <li><a href="{{ url_for('detail', name=s.path) }}">{{ s.path }}</a></li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+<h2>Record</h2>
+<details>
+  <summary class="small dim">full JSON</summary>
+  <pre class="json">{{ raw }}</pre>
+</details>
+{% endblock %}

@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}No catalog · loralab{% endblock %}
+{% block body %}
+<div class="head"><h1>No catalog yet</h1></div>
+<p>There is no <code>catalog.json</code> in <code>{{ cfg.data_dir }}</code>.</p>
+<p>A scan reads each adapter's safetensors <strong>header only</strong> (one HTTP
+<code>Range</code> request per file — roughly 41 KB each, no tensor data), so the
+first sweep of a few hundred adapters moves a handful of megabytes and takes about
+half a minute.</p>
+
+<form method="post" action="{{ url_for('scan_now') }}">
+  <button class="primary" type="submit">Scan {{ cfg.display_scope() }}</button>
+</form>
+
+<p class="dim small">Or from a terminal: <code>loralab scan</code></p>
+
+{% if jobs %}
+<h2>Recent jobs</h2>
+<ul class="jobs">
+  {% for job in jobs %}
+  <li><a href="{{ url_for('job_view', job_id=job.id) }}">{{ job.kind }}</a>
+      <span class="state s-{{ job.state }}">{{ job.state }}</span>
+      <span class="dim small">{{ job.created_utc }}</span></li>
+  {% endfor %}
+</ul>
+{% endif %}
+{% endblock %}
